@@ -1,0 +1,24 @@
+services:
+  service:
+    build:
+      context: ./service 
+    container_name: higload-service 
+    expose:
+    - "8000"
+
+  caddy:
+    image: caddy:2
+    container_name: highload-caddy 
+    ports:
+    - "443:443"
+    - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - service
+
+volumes:
+  caddy_data:
+  caddy_config:

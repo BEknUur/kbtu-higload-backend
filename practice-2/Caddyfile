@@ -1,0 +1,10 @@
+{
+    servers :443 {
+        protocols h1 h2 h3 
+    }
+}
+
+https://localhost { 
+    tls internal 
+    reverse_proxy service:8000
+}
