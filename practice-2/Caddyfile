@@ -8,3 +8,15 @@ https://localhost {
     tls internal 
     reverse_proxy service:9000
 }
+
+# h1 only
+https://localhost:8441 {
+    tls internal 
+    reverse_proxy  service:9000
+}
+
+#h2 only
+https://localhost:8442 {
+    tls internal
+    reverse_proxy service:9000
+}

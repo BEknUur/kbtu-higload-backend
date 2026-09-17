@@ -1,0 +1,57 @@
+* Host localhost:8441 was resolved.
+* IPv6: ::1
+* IPv4: 127.0.0.1
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying [::1]:8441...
+* Connected to localhost (::1) port 8441
+* ALPN: curl offers http/1.1
+} [5 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+} [512 bytes data]
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+{ [25 bytes data]
+* TLSv1.3 (IN), TLS handshake, Certificate (11):
+{ [925 bytes data]
+* TLSv1.3 (IN), TLS handshake, CERT verify (15):
+{ [79 bytes data]
+* TLSv1.3 (IN), TLS handshake, Finished (20):
+{ [36 bytes data]
+* TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+} [1 bytes data]
+* TLSv1.3 (OUT), TLS handshake, Finished (20):
+} [36 bytes data]
+* SSL connection using TLSv1.3 / TLS_AES_128_GCM_SHA256 / X25519 / id-ecPublicKey
+* ALPN: server accepted http/1.1
+* Server certificate:
+*  subject: [NONE]
+*  start date: Sep 17 05:56:36 2026 GMT
+*  expire date: Sep 17 17:56:36 2026 GMT
+*  issuer: CN=Caddy Local Authority - ECC Intermediate
+*  SSL certificate verify result: unable to get local issuer certificate (20), continuing anyway.
+*   Certificate level 0: Public key type EC/prime256v1 (256/128 Bits/secBits), signed using ecdsa-with-SHA256
+*   Certificate level 1: Public key type EC/prime256v1 (256/128 Bits/secBits), signed using ecdsa-with-SHA256
+* using HTTP/1.x
+} [5 bytes data]
+> GET /checklist HTTP/1.1
+> Host: localhost:8441
+> User-Agent: curl/8.5.0
+> Accept: */*
+> 
+{ [5 bytes data]
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+{ [122 bytes data]
+< HTTP/1.1 200 OK
+< Alt-Svc: h3=":8441"; ma=2592000
+< Content-Length: 37
+< Content-Type: application/json
+< Date: Thu, 17 Sep 2026 06:29:48 GMT
+< Server: uvicorn
+< Via: 1.1 Caddy
+< 
+{ [37 bytes data]
+100    37  100    37    0     0   4520      0 --:--:-- --:--:-- --:--:--  4625
+* Connection #0 to host localhost left intact
+{"id":1,"student":"Alikhan Aliaskar"}
