@@ -1,7 +1,12 @@
 from fastapi import FastAPI 
 
 
-app = FastAPI()
+app = FastAPI(
+    title ="Higload-Backend",
+    version="1.0.0",
+)
+
+
 
 
 @app.get("/health")
