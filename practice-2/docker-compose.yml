@@ -1,23 +1,46 @@
 services:
   service:
     build:
-      context: ./service 
-    container_name: higload-service 
+      context: ./service
+    container_name: higload-service
     expose:
-    - "9000"
+      - "9000"
 
   caddy:
     image: caddy:2
-    container_name: highload-caddy 
+    container_name: highload-caddy
     ports:
-    - "443:443"
-    - "443:443/udp"
+      - "443:443"
+      - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - service
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: higload-prometheus
+    volumes:
+      - ./grafana/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - service
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: higload-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
 
 volumes:
   caddy_data:
