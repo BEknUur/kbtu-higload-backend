@@ -6,5 +6,5 @@
 
 https://localhost { 
     tls internal 
-    reverse_proxy service:8000
+    reverse_proxy service:9000
 }

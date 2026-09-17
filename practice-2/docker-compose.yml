@@ -4,7 +4,7 @@ services:
       context: ./service 
     container_name: higload-service 
     expose:
-    - "8000"
+    - "9C000"
 
   caddy:
     image: caddy:2
