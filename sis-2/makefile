@@ -20,3 +20,5 @@ revision:
 
 seed:
 	docker compose exec -T postgres psql -U catalog -d catalog -v ON_ERROR_STOP=1 -v count=$(COUNT) < seed.sql
+rest:
+	uv run hypercorn app.rest:app --bind 127.0.0.1:8000 --reload
