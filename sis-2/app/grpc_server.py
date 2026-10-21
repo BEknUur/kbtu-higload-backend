@@ -2,12 +2,14 @@ import asyncio
 import functools
 from collections.abc import Awaitable, Callable
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 import grpc
 from google.protobuf import empty_pb2
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from app import cache, service
 from app import catalog_pb2 as pb
@@ -31,15 +33,29 @@ ERRORS: dict[type[Exception], grpc.StatusCode] = {
     ValidationError: grpc.StatusCode.INVALID_ARGUMENT,
     InvalidOperation: grpc.StatusCode.INVALID_ARGUMENT,
     IntegrityError: grpc.StatusCode.ALREADY_EXISTS,
-    TimeoutError: grpc.StatusCode.DEADLINE_EXCEEDED,
+    service.Unavailable: grpc.StatusCode.UNAVAILABLE,
+    PoolTimeout: grpc.StatusCode.UNAVAILABLE,
+    OSError: grpc.StatusCode.UNAVAILABLE,
 }
+
+
+def metadata(context: grpc.aio.ServicerContext) -> dict[str, str]:
+    return dict(context.invocation_metadata())
 
 
 def handle_errors(method: Handler) -> Handler:
     @functools.wraps(method)
     async def wrapper(self: Any, request: Any, context: grpc.aio.ServicerContext) -> Any:
+        deadline = asyncio.timeout(context.time_remaining())
         try:
-            return await asyncio.wait_for(method(self, request, context), context.time_remaining())
+            async with deadline:
+                md = metadata(context)
+                service.inject_fault(md.get("x-fault-id"), int(md.get("x-fail-times", 0)))
+                return await method(self, request, context)
+        except TimeoutError as exc:
+            if deadline.expired():
+                await context.abort(grpc.StatusCode.DEADLINE_EXCEEDED, "request deadline exceeded")
+            await context.abort(grpc.StatusCode.UNAVAILABLE, type(exc).__name__)
         except tuple(ERRORS) as exc:
             code = next(code for error, code in ERRORS.items() if isinstance(exc, error))
             await context.abort(code, str(exc).split("\n")[0] or type(exc).__name__)
@@ -74,7 +90,7 @@ def optional_decimal(request: Any, field: str) -> Decimal | None:
 
 
 def idempotency_key(context: grpc.aio.ServicerContext) -> str:
-    key = dict(context.invocation_metadata()).get("idempotency-key", "")
+    key = metadata(context).get("idempotency-key", "")
     if not 8 <= len(key) <= 128:
         raise InvalidArgument("idempotency-key metadata is required (8..128 chars)")
     return key
@@ -158,7 +174,10 @@ class Catalog(pb_grpc.ProductServiceServicer):
 async def serve() -> None:
     server = grpc.aio.server()
     pb_grpc.add_ProductServiceServicer_to_server(Catalog(), server)
-    server.add_insecure_port(settings.grpc_bind)
+    credentials = grpc.ssl_server_credentials(
+        [(Path(settings.tls_key).read_bytes(), Path(settings.tls_cert).read_bytes())]
+    )
+    server.add_secure_port(settings.grpc_bind, credentials)
     await server.start()
     try:
         await server.wait_for_termination()

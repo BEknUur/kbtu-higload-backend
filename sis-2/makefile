@@ -28,3 +28,18 @@ proto:
 
 grpc:
 	uv run python -m app.grpc_server
+
+certs:
+	mkdir -p certs
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 \
+		-keyout certs/key.pem -out certs/cert.pem -subj "/CN=localhost" \
+		-addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+
+rest-tls:
+	uv run hypercorn app.rest:app --bind 127.0.0.1:8443 --certfile certs/cert.pem --keyfile certs/key.pem
+
+test:
+	uv run pytest -q
+
+bench:
+	uv run python bench.py

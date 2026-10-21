@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     cachne_not_ttl: int =30
     cache_enabled: bool =True
     grpc_bind: str = "127.0.0.1:50051"
+    grpc_target: str = "localhost:50051"
+    rest_url: str = "https://localhost:8443"
+    tls_cert: str = "certs/cert.pem"
+    tls_key: str = "certs/key.pem"
+    request_timeout: float = 3.0
+    fault_injection: bool = False
 
 
 settings = Settings()
