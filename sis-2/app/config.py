@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     cache_ttl: int = 60 
     cachne_not_ttl: int =30
     cache_enabled: bool =True
+    grpc_bind: str = "127.0.0.1:50051"
 
 
 settings = Settings()

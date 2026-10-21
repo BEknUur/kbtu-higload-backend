@@ -14,7 +14,7 @@ MISSING = ""
 
 client = redis.from_url(
     settings.redis_url,
-    decde_responses=True,
+    decode_responses=True,
     socket_timeout=settings.redis_timeout,
     socket_connect_timeout=settings.redis_timeout,
 )

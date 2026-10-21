@@ -19,7 +19,7 @@ class ProductOut(BaseModel):
     description: str 
     price: Decimal
     category_id: int 
-    attributes: dict 
+    attributes: dict[str, str]
     image_keys: list[str]
     version: int 
     created_at: datetime
@@ -38,7 +38,7 @@ class ProductCreate(BaseModel):
     description: str = ""
     price: Price
     category_id: int
-    attributes: dict = {}
+    attributes: dict[str, str] = {}
     image_keys: list[str] = []
 
 
@@ -47,7 +47,7 @@ class ProductUpdate(BaseModel):
     description: str | None = None
     price: Price | None = None
     category_id: int | None = None
-    attributes: dict | None = None
+    attributes: dict[str, str] | None = None
     image_keys: list[str] | None = None
 
     @model_validator(mode="after")
