@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import FastAPI, Header, Query, Request, Response
+from fastapi import APIRouter, FastAPI, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
@@ -10,44 +10,55 @@ from app import service
 from app.db import engine
 from app.schemas import CategoryOut, ProductCreate, ProductOut, ProductPage, ProductUpdate
 
-IdempotencyKey = Annotated[str, Header(min_length=8, max_length=128)]  # header "Idempotency-Key"
+IdempotencyKey = Annotated[str, Header(min_length=8, max_length=128)]
+IfMatch = Annotated[int, Header()]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    await engine.dispose()  
+    await engine.dispose()
 
 
 app = FastAPI(title="Product catalog", lifespan=lifespan)
+router = APIRouter(prefix="/api/v1")
+
+
+def error(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content={"detail": detail})
 
 
 @app.exception_handler(service.NotFound)
-async def not_found(request: Request, exc: service.NotFound):
-    return JSONResponse(status_code=404, content={"detail": "product not found"})
+async def not_found(request: Request, exc: service.NotFound) -> JSONResponse:
+    return error(404, "product not found")
 
 
 @app.exception_handler(service.VersionMismatch)
-async def version_mismatch(request: Request, exc: service.VersionMismatch):
-    return JSONResponse(status_code=412, content={"detail": "version is stale, re-read the product"})
+async def version_mismatch(request: Request, exc: service.VersionMismatch) -> JSONResponse:
+    return error(412, "version is stale, re-read the product")
 
 
 @app.exception_handler(service.IdempotencyKeyReused)
-async def key_reused(request: Request, exc: service.IdempotencyKeyReused):
-    return JSONResponse(status_code=422, content={"detail": "Idempotency-Key was used for a different request"})
+async def key_reused(request: Request, exc: service.IdempotencyKeyReused) -> JSONResponse:
+    return error(422, "Idempotency-Key was used for a different request")
 
 
 @app.exception_handler(IntegrityError)
-async def integrity_error(request: Request, exc: IntegrityError):
-    return JSONResponse(status_code=409, content={"detail": str(exc.orig).split("\n")[0]})
+async def integrity_error(request: Request, exc: IntegrityError) -> JSONResponse:
+    return error(409, str(exc.orig).split("\n")[0])
 
 
-@app.get("/api/v1/products/{product_id}")
+def mark_replayed(response: Response, replayed: bool) -> None:
+    if replayed:
+        response.headers["Idempotent-Replayed"] = "true"
+
+
+@router.get("/products/{product_id}")
 async def get_product(product_id: int) -> ProductOut:
     return await service.get_product(product_id)
 
 
-@app.get("/api/v1/products")
+@router.get("/products")
 async def list_products(
     category_id: int | None = None,
     price_min: Annotated[Decimal | None, Query(ge=0)] = None,
@@ -56,42 +67,37 @@ async def list_products(
     cursor: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> ProductPage:
-    return await service.list_products(
-        cursor=cursor, limit=limit, category_id=category_id,
-        price_min=price_min, price_max=price_max, color=color,
-    )
+    return await service.list_products(cursor, limit, category_id, price_min, price_max, color)
 
 
-@app.get("/api/v1/categories")
+@router.get("/categories")
 async def list_categories() -> list[CategoryOut]:
     return await service.list_categories()
 
 
-@app.post("/api/v1/admin/products", status_code=201)
-async def create_product(
-    body: ProductCreate, 
-    idempotency_key: IdempotencyKey, 
-    response: Response) -> ProductOut:
+@router.post("/admin/products", status_code=201)
+async def create_product(body: ProductCreate, idempotency_key: IdempotencyKey, response: Response) -> ProductOut:
     product, replayed = await service.create_product(body, idempotency_key)
-    if replayed:
-        response.headers["Idempotent-Replayed"] = "true"
+    mark_replayed(response, replayed)
     return product
 
 
-@app.patch("/api/v1/admin/products/{product_id}")
+@router.patch("/admin/products/{product_id}")
 async def update_product(
-    product_id: int, 
-    body: ProductUpdate, 
+    product_id: int,
+    body: ProductUpdate,
     idempotency_key: IdempotencyKey,
-    if_match: Annotated[int, Header()], 
-    response: Response) -> ProductOut:
-
+    if_match: IfMatch,
+    response: Response,
+) -> ProductOut:
     product, replayed = await service.update_product(product_id, if_match, body, idempotency_key)
-    if replayed:
-        response.headers["Idempotent-Replayed"] = "true"
+    mark_replayed(response, replayed)
     return product
 
 
-@app.delete("/api/v1/admin/products/{product_id}", status_code=204)
+@router.delete("/admin/products/{product_id}", status_code=204)
 async def delete_product(product_id: int) -> None:
     await service.delete_product(product_id)
+
+
+app.include_router(router)

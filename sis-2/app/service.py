@@ -1,13 +1,21 @@
 import hashlib
 import json
+from collections.abc import Sequence
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import Session
 from app.models import Category, IdempotencyKey, Product
-from app.schemas import ProductCreate, ProductOut, ProductUpdate
+from app.schemas import ProductCreate, ProductOut, ProductPage, ProductUpdate
+
+ACTIVE = "active"
+DELETED = "deleted"
+
+WriteResult = tuple[ProductOut, bool]
 
 
 class NotFound(Exception):
@@ -19,125 +27,127 @@ class VersionMismatch(Exception):
 
 
 class IdempotencyKeyReused(Exception):
-    """Same Idempotency-Key, different request."""
+    pass
 
 
 async def get_product(product_id: int) -> Product:
-    async with Session() as s:
-        p = await s.get(Product, product_id)
-    if p is None or p.status != "active":
+    async with Session() as session:
+        product = await session.get(Product, product_id)
+    if product is None or product.status != ACTIVE:
         raise NotFound
-    return p
+    return product
 
 
 async def list_products(
-        cursor: int = 0,
-        limit: int = 20,
-        category_id: int | None = None,
-        price_min: Decimal | None = None,
-        price_max: Decimal | None = None,
-        color: str | None = None,
-        ):
-    q = select(Product).where(Product.status == "active", Product.id > cursor)
+    cursor: int = 0,
+    limit: int = 20,
+    category_id: int | None = None,
+    price_min: Decimal | None = None,
+    price_max: Decimal | None = None,
+    color: str | None = None,
+) -> ProductPage:
+    query = select(Product).where(Product.status == ACTIVE, Product.id > cursor)
     if category_id is not None:
-        q = q.where(Product.category_id == category_id)
+        query = query.where(Product.category_id == category_id)
     if price_min is not None:
-        q = q.where(Product.price >= price_min)
+        query = query.where(Product.price >= price_min)
     if price_max is not None:
-        q = q.where(Product.price <= price_max)
+        query = query.where(Product.price <= price_max)
     if color is not None:
-        q = q.where(Product.attributes.contains({"color": color}))
+        query = query.where(Product.attributes.contains({"color": color}))
+    query = query.order_by(Product.id).limit(limit)
 
-    async with Session() as s:
-        items = (await s.scalars(q.order_by(Product.id).limit(limit))).all()
+    async with Session() as session:
+        items = (await session.scalars(query)).all()
     next_cursor = items[-1].id if len(items) == limit else None
-    return {"items": items, "next_cursor": next_cursor}
+    return ProductPage(items=items, next_cursor=next_cursor)
 
 
-async def list_categories():
-    async with Session() as s:
-        return (await s.scalars(select(Category).order_by(Category.id))).all()
+async def list_categories() -> Sequence[Category]:
+    async with Session() as session:
+        return (await session.scalars(select(Category).order_by(Category.id))).all()
 
 
-def _request_hash(
-        operation: str, 
-        product_id: int | None, 
-        version: int | None, 
-        data: dict) -> str:
+async def create_product(data: ProductCreate, key: str) -> WriteResult:
+    request_hash = _request_hash("create", None, None, data.model_dump(mode="json"))
+
+    async with Session() as session, session.begin():
+        stored = await _claim_key(session, key, request_hash)
+        if stored:
+            return ProductOut.model_validate(stored.response), True
+
+        product = Product(**data.model_dump())
+        session.add(product)
+        await session.flush()
+
+        result = ProductOut.model_validate(product)
+        await _save_result(session, key, result)
+    return result, False
+
+
+async def update_product(product_id: int, expected_version: int, data: ProductUpdate, key: str) -> WriteResult:
+    changes = data.model_dump(exclude_unset=True)
+    request_hash = _request_hash(
+        "update", product_id, expected_version, data.model_dump(mode="json", exclude_unset=True)
+    )
+
+    async with Session() as session, session.begin():
+        stored = await _claim_key(session, key, request_hash)
+        if stored:
+            return ProductOut.model_validate(stored.response), True
+
+        product = await session.scalar(
+            update(Product)
+            .where(Product.id == product_id, Product.status == ACTIVE, Product.version == expected_version)
+            .values(**changes, version=Product.version + 1, updated_at=func.now())
+            .returning(Product)
+        )
+        if product is None:
+            raise VersionMismatch if await _is_active(session, product_id) else NotFound
+
+        result = ProductOut.model_validate(product)
+        await _save_result(session, key, result)
+    return result, False
+
+
+async def delete_product(product_id: int) -> None:
+    async with Session() as session, session.begin():
+        await session.execute(
+            update(Product)
+            .where(Product.id == product_id, Product.status == ACTIVE)
+            .values(status=DELETED, version=Product.version + 1, updated_at=func.now())
+        )
+
+
+async def _is_active(session: AsyncSession, product_id: int) -> bool:
+    found = await session.scalar(select(Product.id).where(Product.id == product_id, Product.status == ACTIVE))
+    return found is not None
+
+
+def _request_hash(operation: str, product_id: int | None, version: int | None, data: dict[str, Any]) -> str:
     raw = json.dumps([operation, product_id, version, data], sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-async def _claim_key(s, 
-                     key: str, 
-                     request_hash: str) -> IdempotencyKey | None:
-    inserted = await s.scalar(
+async def _claim_key(session: AsyncSession, key: str, request_hash: str) -> IdempotencyKey | None:
+    inserted = await session.scalar(
         insert(IdempotencyKey)
         .values(key=key, request_hash=request_hash)
-        .on_conflict_do_nothing()  
+        .on_conflict_do_nothing()
         .returning(IdempotencyKey.key)
     )
     if inserted:
         return None
-    stored = await s.get(IdempotencyKey, key)
-    if stored.request_hash != request_hash:
+
+    stored = await session.get(IdempotencyKey, key)
+    if stored is None or stored.request_hash != request_hash:
         raise IdempotencyKeyReused
     return stored
 
 
-async def _save_result(s, key: str, out: ProductOut) -> None:
-    await s.execute(
-        update(IdempotencyKey).where(IdempotencyKey.key == key).values(response=out.model_dump(mode="json"))
+async def _save_result(session: AsyncSession, key: str, result: ProductOut) -> None:
+    await session.execute(
+        update(IdempotencyKey)
+        .where(IdempotencyKey.key == key)
+        .values(response=result.model_dump(mode="json"))
     )
-
-
-async def create_product(data: ProductCreate, key: str) -> tuple[ProductOut, bool]:
-
-    h = _request_hash("create", None, None, data.model_dump(mode="json"))
-    async with Session() as s, s.begin():
-        stored = await _claim_key(s, key, h)
-        if stored:
-            return ProductOut.model_validate(stored.response), True
-        p = Product(**data.model_dump())
-        s.add(p)
-        await s.flush()  
-        out = ProductOut.model_validate(p)
-        await _save_result(s, key, out)
-    return out, False
-
-
-async def update_product(
-        product_id: int, 
-        expected_version: int, 
-        data: ProductUpdate,
-        key: str
-        ) -> tuple[ProductOut, bool]:
-    changes = data.model_dump(exclude_unset=True)
-    h = _request_hash("update", product_id, expected_version, data.model_dump(mode="json", exclude_unset=True))
-    async with Session() as s, s.begin():
-        stored = await _claim_key(s, key, h)
-        if stored:
-            return ProductOut.model_validate(stored.response), True
-        p = await s.scalar(
-            update(Product)
-            .where(Product.id == product_id, Product.status == "active", Product.version == expected_version)
-            .values(**changes, version=Product.version + 1, updated_at=func.now())
-            .returning(Product)
-        )
-        if p is None:
-            exists = await s.scalar(
-                select(Product.id).where(Product.id == product_id, Product.status == "active")
-            )
-            raise VersionMismatch if exists else NotFound
-        out = ProductOut.model_validate(p)
-        await _save_result(s, key, out)
-    return out, False
-
-
-async def delete_product(product_id: int) -> None:
-    async with Session() as s, s.begin():
-        await s.execute(
-            update(Product)
-            .where(Product.id == product_id, Product.status == "active")
-            .values(status="deleted", version=Product.version + 1, updated_at=func.now())
-        )
