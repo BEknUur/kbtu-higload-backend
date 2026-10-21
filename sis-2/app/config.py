@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     db_timeout: float = 0.050
     cache_ttl: int = 60 
     cachne_not_ttl: int =30
+    cache_enabled: bool =True
 
 
 settings = Settings()

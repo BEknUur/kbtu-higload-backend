@@ -6,7 +6,7 @@ from fastapi import APIRouter, FastAPI, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
-from app import service
+from app import cache, service
 from app.db import engine
 from app.schemas import CategoryOut, ProductCreate, ProductOut, ProductPage, ProductUpdate
 
@@ -18,6 +18,7 @@ IfMatch = Annotated[int, Header()]
 async def lifespan(app: FastAPI):
     yield
     await engine.dispose()
+    await cache.client.aclose()
 
 
 app = FastAPI(title="Product catalog", lifespan=lifespan)
