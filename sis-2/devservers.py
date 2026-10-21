@@ -11,11 +11,7 @@ from app.config import settings
 REST_PORT = 8443
 GRPC_PORT = int(settings.grpc_bind.rsplit(":", 1)[1])
 
-REST = [
-    sys.executable, "-m", "hypercorn", "app.rest:app",
-    "--bind", f"127.0.0.1:{REST_PORT}",
-    "--certfile", settings.tls_cert, "--keyfile", settings.tls_key,
-]
+REST = [sys.executable, "-m", "hypercorn", "--config", "hypercorn.toml", "app.rest:app"]
 GRPC = [sys.executable, "-m", "app.grpc_server"]
 
 

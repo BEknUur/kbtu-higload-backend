@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
@@ -9,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import cache
+from app.config import settings
 from app.db import Session
 from app.models import Category, IdempotencyKey, Product
 from app.schemas import ProductCreate, ProductOut, ProductPage, ProductUpdate
@@ -29,6 +31,21 @@ class VersionMismatch(Exception):
 
 class IdempotencyKeyReused(Exception):
     pass
+
+
+class Unavailable(Exception):
+    pass
+
+
+_fault_attempts: Counter[str] = Counter()
+
+
+def inject_fault(fault_id: str | None, fail_times: int) -> None:
+    if not settings.fault_injection or not fault_id:
+        return
+    _fault_attempts[fault_id] += 1
+    if _fault_attempts[fault_id] <= fail_times:
+        raise Unavailable(f"injected fault {_fault_attempts[fault_id]}/{fail_times}")
 
 
 async def get_product(product_id: int) -> ProductOut:

@@ -36,7 +36,7 @@ certs:
 		-addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 
 rest-tls:
-	uv run hypercorn app.rest:app --bind 127.0.0.1:8443 --certfile certs/cert.pem --keyfile certs/key.pem
+	uv run hypercorn --config hypercorn.toml app.rest:app
 
 test:
 	uv run pytest -q
