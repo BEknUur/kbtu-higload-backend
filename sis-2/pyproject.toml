@@ -1,0 +1,27 @@
+[project]
+name = "sis2-product-catalog"
+version = "0.1.0"
+description = "Product catalog: REST HTTP/1.1, HTTP/2 and gRPC"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+    "fastapi",
+    "hypercorn",
+    "asyncpg",
+    "redis",
+    "grpcio",
+    "protobuf",
+    "httpx[http2]",
+    "pydantic-settings",
+]
+
+[dependency-groups]
+dev = [
+    "grpcio-tools",
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
