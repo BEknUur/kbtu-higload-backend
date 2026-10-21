@@ -13,6 +13,8 @@ dependencies = [
     "protobuf",
     "httpx[http2]",
     "pydantic-settings",
+    "sqlalchemy[asyncio]>=2.1.6",
+    "alembic>=1.20.0",
 ]
 
 [dependency-groups]
