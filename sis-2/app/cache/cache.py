@@ -52,3 +52,6 @@ async def put_missing(product_id: int) -> None:
 
 async def delete(product_id: int) -> None:
     await _safe(client.delete(_key(product_id)))
+
+async def delete_or_raise(product_id: int) -> None:
+    await client.delete(_key(product_id))

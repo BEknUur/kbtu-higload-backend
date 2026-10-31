@@ -1,3 +1,5 @@
+.PHONY: up down clean psql migrate revision seed rest proto grpc certs rest-tls test bench outbox
+
 COUNT ?= 10000
 
 up:
@@ -21,13 +23,13 @@ revision:
 seed:
 	docker compose exec -T postgres psql -U catalog -d catalog -v ON_ERROR_STOP=1 -v count=$(COUNT) < seed.sql
 rest:
-	uv run hypercorn app.rest:app --bind 127.0.0.1:8000 --reload
+	uv run hypercorn app.api.rest:app --bind 127.0.0.1:8000 --reload
 
 proto:
-	uv run python -m grpc_tools.protoc -Iapp=proto --python_out=. --pyi_out=. --grpc_python_out=. proto/catalog.proto
+	uv run python -m grpc_tools.protoc -Iapp/api=proto --python_out=. --pyi_out=. --grpc_python_out=. proto/catalog.proto
 
 grpc:
-	uv run python -m app.grpc_server
+	uv run python -m app.api.grpc_server
 
 certs:
 	mkdir -p certs
@@ -36,10 +38,13 @@ certs:
 		-addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 
 rest-tls:
-	uv run hypercorn --config hypercorn.toml app.rest:app
+	uv run hypercorn --config hypercorn.toml app.api.rest:app
 
 test:
 	uv run pytest -q
 
 bench:
 	uv run python bench.py
+
+outbox:
+	uv run python -m app.workers.outbox_worker

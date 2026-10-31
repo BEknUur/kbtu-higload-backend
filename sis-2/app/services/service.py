@@ -9,14 +9,18 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import cache
+from app.cache import cache
 from app.config import settings
-from app.db import Session
-from app.models import Category, IdempotencyKey, Product
+from app.database.db import ReadSession, Session
+from app.database.models import Category, IdempotencyKey, OutboxEvent, Product
 from app.schemas import ProductCreate, ProductOut, ProductPage, ProductUpdate
 
 ACTIVE = "active"
 DELETED = "deleted"
+
+CREATED_EVENT = "product.created"
+UPDATED_EVENT = "product.updated"
+DELETED_EVENT = "product.deleted"
 
 WriteResult = tuple[ProductOut, bool]
 
@@ -55,7 +59,7 @@ async def get_product(product_id: int) -> ProductOut:
     if cached is not None:
         return ProductOut.model_validate_json(cached)
 
-    async with Session() as session:
+    async with ReadSession() as session:
         product = await session.get(Product, product_id)
     if product is None or product.status != ACTIVE:
         await cache.put_missing(product_id)
@@ -85,14 +89,14 @@ async def list_products(
         query = query.where(Product.attributes.contains({"color": color}))
     query = query.order_by(Product.id).limit(limit)
 
-    async with Session() as session:
+    async with ReadSession() as session:
         items = (await session.scalars(query)).all()
     next_cursor = items[-1].id if len(items) == limit else None
     return ProductPage(items=items, next_cursor=next_cursor)
 
 
 async def list_categories() -> Sequence[Category]:
-    async with Session() as session:
+    async with ReadSession() as session:
         return (await session.scalars(select(Category).order_by(Category.id))).all()
 
 
@@ -110,6 +114,7 @@ async def create_product(data: ProductCreate, key: str) -> WriteResult:
 
         result = ProductOut.model_validate(product)
         await _save_result(session, key, result)
+        _publish(session, CREATED_EVENT, result)
     await cache.delete(result.id)
     return result, False
 
@@ -136,17 +141,21 @@ async def update_product(product_id: int, expected_version: int, data: ProductUp
 
         result = ProductOut.model_validate(product)
         await _save_result(session, key, result)
+        _publish(session, UPDATED_EVENT, result)
     await cache.delete(product_id)
     return result, False
 
 
 async def delete_product(product_id: int) -> None:
     async with Session() as session, session.begin():
-        await session.execute(
+        deleted = await session.scalar(
             update(Product)
             .where(Product.id == product_id, Product.status == ACTIVE)
             .values(status=DELETED, version=Product.version + 1, updated_at=func.now())
+            .returning(Product.id)
         )
+        if deleted is not None:
+            session.add(OutboxEvent(product_id=product_id, event_type=DELETED_EVENT, payload={"id": product_id}))
     await cache.delete(product_id)
 
 
@@ -182,3 +191,7 @@ async def _save_result(session: AsyncSession, key: str, result: ProductOut) -> N
         .where(IdempotencyKey.key == key)
         .values(response=result.model_dump(mode="json"))
     )
+
+
+def _publish(session: AsyncSession, event_type: str, product: ProductOut) -> None:
+    session.add(OutboxEvent(product_id=product.id, event_type=event_type, payload=product.model_dump(mode="json")))

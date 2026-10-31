@@ -3,4 +3,4 @@
 .env
 __pycache__/
 certs/
-app/catalog_pb2*
+app/api/catalog_pb2*

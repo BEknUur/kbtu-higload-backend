@@ -39,25 +39,31 @@ REST по HTTP/1.1 и HTTP/2 обслуживает **один и тот же** 
 ## 2. Архитектура
 
 ```
- REST клиент ─┬─ HTTP/1.1 ─┐
-              └─ HTTP/2 ───┤ Hypercorn :8443 (TLS) ── app/rest.py ──┐
- gRPC клиент ─── HTTP/2 ──── grpc.aio  :50051 (TLS) ── app/grpc_server.py ─┤
-                                                                          ▼
-                                                      app/service.py (общая бизнес-логика)
-                                                         │                     │
-                                                 app/cache.py            app/db.py + models.py
-                                                   Redis 7.4             PostgreSQL 17
+REST клиент ─┬─ HTTP/1.1 ─┐
+             └─ HTTP/2 ───┤ Hypercorn :8443 (TLS) ── app/api/rest.py ─────────┐
+gRPC клиент ─── HTTP/2 ──── grpc.aio  :50051 (TLS) ── app/api/grpc_server.py ─┤
+                                                                              ▼
+                                                 app/services/service.py (общая бизнес-логика)
+                                                    │                          │
+                                           app/cache/cache.py          app/database/ (db.py, models.py)
+                                              Redis 7.4                PostgreSQL 17 (primary + мок реплики)
+                                                    ▲                          │ outbox
+                                                    └── DEL ── app/workers/outbox_worker.py ── reindex ──▶ app/services/search.py (мок OpenSearch)
 ```
+
+Диаграммы потоков (чтение, запись с повторами, таймауты, outbox) — в [README.md](README.md). Компоненты SIS #1, которые не поднимаются (load balancer, CDN, S3, Kubernetes), там же отмечены отдельно; read replica и OpenSearch заменены моками.
 
 | Файл | Ответственность |
 |---|---|
-| `app/models.py` | таблицы SQLAlchemy: `categories`, `products`, `idempotency_keys`; индексы |
+| `app/database/models.py` | таблицы SQLAlchemy: `categories`, `products`, `idempotency_keys`, `outbox`; индексы |
 | `migrations/` | миграции Alembic |
 | `app/schemas.py` | Pydantic-модели API: `ProductOut`, `ProductCreate`, `ProductUpdate`, `Price` |
-| `app/service.py` | операции каталога, идемпотентность, версии, инвалидация кеша |
-| `app/cache.py` | Redis cache-aside, TTL с разбросом, кеш 404, работа при недоступном Redis |
-| `app/rest.py` | REST-маршруты, коды ошибок, middleware `Deadline` |
-| `proto/catalog.proto`, `app/grpc_server.py` | gRPC-контракт и сервер |
+| `app/services/service.py` | операции каталога, идемпотентность, версии, события outbox, инвалидация кеша |
+| `app/database/db.py` | пулы `Session` (primary, запись) и `ReadSession` (реплика, чтение; мок — та же БД) |
+| `app/workers/outbox_worker.py`, `app/services/search.py` | воркер outbox: `DEL` ключа Redis и reindex в мок OpenSearch |
+| `app/cache/cache.py` | Redis cache-aside, TTL с разбросом, кеш 404, работа при недоступном Redis |
+| `app/api/rest.py` | REST-маршруты, коды ошибок, middleware `Deadline` |
+| `proto/catalog.proto`, `app/api/grpc_server.py` | gRPC-контракт и сервер |
 | `app/clients.py` | REST/gRPC-клиенты с таймаутами и повторами |
 | `tests/`, `bench.py`, `devservers.py` | тесты, бенчмарк, запуск серверов для них |
 
@@ -89,7 +95,7 @@ REST по HTTP/1.1 и HTTP/2 обслуживает **один и тот же** 
 
 ## 4. Идемпотентность, таймауты, повторы
 
-### Идемпотентность (`app/service.py`)
+### Идемпотентность (`app/services/service.py`)
 - Запись (`create`, `update`) требует ключ: `Idempotency-Key` (REST) или `idempotency-key` (gRPC metadata).
 - В **той же транзакции**, что и изменение товара, выполняется `INSERT INTO idempotency_keys ... ON CONFLICT DO NOTHING`, а после записи сохраняется нормализованный ответ. Товар и ключ фиксируются вместе или не фиксируются вовсе.
 - Повтор с тем же ключом и теми же данными → сохранённый ответ (заголовок/трейлер `idempotent-replayed: true`), без повторной записи и без повторного увеличения версии. Тот же ключ с другими данными → 422 / `INVALID_ARGUMENT`.
@@ -118,7 +124,7 @@ REST по HTTP/1.1 и HTTP/2 обслуживает **один и тот же** 
 
 ## 5. Тесты
 
-`make test` — 26 интеграционных тестов (pytest); сами поднимают REST и gRPC серверы через `devservers.py`. Четыре прогона подряд — 26/26, ~7 с.
+`make test` — 27 интеграционных тестов (pytest); сами поднимают REST и gRPC серверы через `devservers.py`. Все проходят, ~4–7 с.
 
 | Группа | Что проверяется |
 |---|---|
@@ -131,6 +137,7 @@ REST по HTTP/1.1 и HTTP/2 обслуживает **один и тот же** 
 | Повторы | 2 сбоя → успех (REST и gRPC); 5 сбоев → ровно 3 попытки и 503 / `UNAVAILABLE`; 404 не повторяется; повтор POST после сбоев создаёт один товар |
 | Таймауты | серверный срок REST → 504; клиентский бюджет ограничивает все попытки; gRPC deadline → `DEADLINE_EXCEEDED` |
 | Кеш | после GET ключ в Redis, после PATCH удалён и следующий GET отдаёт новые данные; 404 кешируется; при недоступном Redis каталог работает |
+| Outbox | create / update / delete пишут событие; воркер удаляет ключ из Redis, индексирует и удаляет документ в моке поиска, отмечает `processed_at` |
 
 ## 6. Методика измерений
 
@@ -223,8 +230,10 @@ HTTP/1.1 и HTTP/2 передают одинаковое JSON-тело. Protobuf
 
 - Клиент, серверы, PostgreSQL и Redis работают на одной машине и делят CPU; при 20 потоках часть задержки — сам Python-клиент. Сеть — loopback, без реальных задержек и потерь (влияние потерь на HTTP/1.1 и HTTP/2 измерено в practice-2: TCP head-of-line blocking ухудшает хвост HTTP/2).
 - Размер payload — размер тела сообщения; заголовки HTTP, HPACK и TLS не учитываются.
-- Инвалидация кеша — прямой `DEL` после commit, без outbox. Если процесс упадёт между commit и `DEL` (или чтение успеет записать старую версию сразу после `DEL`), устаревшая карточка живёт до конца TTL, то есть до ~72 с (60 с + разброс). Это допустимая временная рассогласованность для каталога; цена при оформлении заказа должна читаться из PostgreSQL.
-- Нет защиты от одновременного промаха по горячему ключу (stampede / single-flight), OpenSearch, реплик, outbox, авторизации администратора — вне объёма SIS #2.
+- Инвалидация кеша: прямой `DEL` после commit (быстрый путь) плюс событие outbox в той же транзакции, которое воркер обрабатывает за ~0.2 с, даже если процесс API упал между commit и `DEL` или Redis был недоступен. Остаётся гонка «чтение записало старую версию сразу после `DEL`»: её закрывает `DEL` воркера, если он выполнится позже, иначе карточка живёт до конца TTL (~72 с). Цена при оформлении заказа должна читаться из primary.
+- Бенчмарк (§7) снят до добавления outbox и `ReadSession`; путь чтения не изменился (отдельный пул к той же БД), а запись добавляет один `INSERT` в транзакцию.
+- Моки: read replica — отдельный пул к той же БД (нет лага репликации); OpenSearch — `FakeSearchIndex` в памяти воркера, список товаров строится из PostgreSQL (fallback-режим SIS #1), фасетов нет. Один воркер outbox: порядок событий сохраняется; при нескольких воркерах (`SKIP LOCKED`) порядок по товару не гарантирован. Обработанные события не удаляются.
+- Нет защиты от одновременного промаха по горячему ключу (stampede / single-flight), load balancer, CDN, Kubernetes, авторизации администратора — вне объёма SIS #2.
 - Записи `idempotency_keys` не удаляются; в продакшене нужна очистка по `created_at` (например, старше 24 ч).
 
 ## 11. Воспроизведение
@@ -240,8 +249,9 @@ make proto         # код gRPC из proto/catalog.proto
 make rest-tls      # REST: https://localhost:8443 (HTTP/1.1 + HTTP/2)
 make grpc          # gRPC: localhost:50051 (TLS)
 make rest          # REST для разработки: http://127.0.0.1:8000, /docs
+make outbox        # outbox worker
 
-make test          # 26 интеграционных тестов (поднимают серверы сами)
+make test          # 27 интеграционных тестов (поднимают серверы сами)
 make bench         # бенчмарк, ~12 минут → benchmarks/
 ```
 

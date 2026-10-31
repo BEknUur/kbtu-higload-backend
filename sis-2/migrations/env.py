@@ -21,7 +21,7 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 from app.config import settings
-from app.models import Base
+from app.database.models import Base
 
 # same DATABASE_URL as the app (.env), alembic.ini url is ignored
 config.set_main_option("sqlalchemy.url", settings.database_url)

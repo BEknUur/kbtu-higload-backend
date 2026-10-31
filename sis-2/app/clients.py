@@ -9,7 +9,7 @@ from typing import Any
 import grpc
 import httpx
 
-from app import catalog_pb2_grpc as pb_grpc
+from app.api import catalog_pb2_grpc as pb_grpc
 from app.config import settings
 
 ATTEMPTS = 3

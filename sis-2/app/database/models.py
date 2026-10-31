@@ -51,3 +51,15 @@ class IdempotencyKey(Base):
     status_code: Mapped[int | None]
     response: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox"
+    __table_args__ = (Index("outbox_pending", "id", postgresql_where=text("processed_at IS NULL")),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    product_id: Mapped[int] = mapped_column(BigInteger)
+    event_type: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

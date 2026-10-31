@@ -11,8 +11,8 @@ from app.config import settings
 REST_PORT = 8443
 GRPC_PORT = int(settings.grpc_bind.rsplit(":", 1)[1])
 
-REST = [sys.executable, "-m", "hypercorn", "--config", "hypercorn.toml", "app.rest:app"]
-GRPC = [sys.executable, "-m", "app.grpc_server"]
+REST = [sys.executable, "-m", "hypercorn", "--config", "hypercorn.toml", "app.api.rest:app"]
+GRPC = [sys.executable, "-m", "app.api.grpc_server"]
 
 
 def port_open(port: int) -> bool:

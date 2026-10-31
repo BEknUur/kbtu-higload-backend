@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from app import catalog_pb2 as pb
+from app.api import catalog_pb2 as pb
 from app.clients import grpc_stub, rest_client
 from devservers import running_servers
 

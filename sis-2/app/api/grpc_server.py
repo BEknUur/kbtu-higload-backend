@@ -11,11 +11,12 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 
-from app import cache, service
-from app import catalog_pb2 as pb
-from app import catalog_pb2_grpc as pb_grpc
+from app.cache import cache
+from app.services import service
+from app.api import catalog_pb2 as pb
+from app.api import catalog_pb2_grpc as pb_grpc
 from app.config import settings
-from app.db import engine
+from app.database.db import dispose
 from app.schemas import ProductCreate, ProductOut, ProductUpdate
 
 Handler = Callable[[Any, Any, grpc.aio.ServicerContext], Awaitable[Any]]
@@ -182,7 +183,7 @@ async def serve() -> None:
     try:
         await server.wait_for_termination()
     finally:
-        await engine.dispose()
+        await dispose()
         await cache.client.aclose()
 
 

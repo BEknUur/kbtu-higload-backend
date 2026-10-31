@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Iterator
 import httpx
 import pytest
 
-from app import catalog_pb2_grpc as pb_grpc
+from app.api import catalog_pb2_grpc as pb_grpc
 from app.clients import grpc_stub, rest_client
 from devservers import running_servers
 

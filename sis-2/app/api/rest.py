@@ -9,9 +9,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app import cache, service
+from app.cache import cache
+from app.services import service
 from app.config import settings
-from app.db import engine
+from app.database.db import dispose
 from app.schemas import CategoryOut, ProductCreate, ProductOut, ProductPage, ProductUpdate
 
 IdempotencyKey = Annotated[str, Header(min_length=8, max_length=128)]
@@ -21,7 +22,7 @@ IfMatch = Annotated[int, Header()]
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    await engine.dispose()
+    await dispose()
     await cache.client.aclose()
 
 

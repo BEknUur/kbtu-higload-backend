@@ -7,12 +7,15 @@ import pytest
 import redis.asyncio as redis
 from google.protobuf import field_mask_pb2
 
-from app import cache, service
-from app import catalog_pb2 as pb
-from app import catalog_pb2_grpc as pb_grpc
+from app.cache import cache
+from app.services import service
+from app.workers import outbox_worker
+from app.api import catalog_pb2 as pb
+from app.api import catalog_pb2_grpc as pb_grpc
 from app.clients import rest_request
 from app.config import settings
-from app.db import engine
+from app.services.search import FakeSearchIndex
+from app.database.db import dispose, engine
 
 PRODUCTS = "/api/v1/admin/products"
 
@@ -90,7 +93,7 @@ async def test_repeated_delete_changes_nothing(rest: httpx.AsyncClient) -> None:
         before = (await conn.exec_driver_sql(f"SELECT version, updated_at FROM products WHERE id = {product['id']}")).one()
         assert (await rest.delete(f"{PRODUCTS}/{product['id']}")).status_code == 204
         after = (await conn.exec_driver_sql(f"SELECT version, updated_at FROM products WHERE id = {product['id']}")).one()
-    await engine.dispose()
+    await dispose()
     assert before == after
 
 
@@ -303,4 +306,36 @@ async def test_catalog_works_when_redis_is_down(monkeypatch: pytest.MonkeyPatch)
     product = await service.get_product(1)
 
     assert product.id == 1
-    await engine.dispose()
+    await dispose()
+
+
+async def test_outbox_worker_reindexes_and_invalidates(rest: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+    monkeypatch.setattr(cache, "client", redis_client)
+    search = FakeSearchIndex()
+
+    async def drain() -> None:
+        while await outbox_worker.process_batch(search):
+            pass
+
+    product = (await create(rest)).json()
+    await rest.patch(
+        f"{PRODUCTS}/{product['id']}", json={"name": "Indexed"}, headers={"Idempotency-Key": unique("key"), "If-Match": "1"}
+    )
+    await redis_client.set(f"product:{product['id']}", "stale")
+    await drain()
+
+    assert search.documents[product["id"]]["name"] == "Indexed"
+    assert not await redis_client.exists(f"product:{product['id']}")
+
+    await rest.delete(f"{PRODUCTS}/{product['id']}")
+    await drain()
+    assert product["id"] not in search.documents
+
+    async with engine.connect() as conn:
+        pending = (await conn.exec_driver_sql(
+            f"SELECT count(*) FROM outbox WHERE product_id = {product['id']} AND processed_at IS NULL"
+        )).scalar()
+    assert pending == 0
+    await dispose()
+    await redis_client.aclose()
