@@ -1,177 +1,177 @@
-# SIS #2 — Product Catalog: gRPC и HTTP/2 против REST/JSON
+# SIS #2 — Product Catalog: gRPC and HTTP/2 vs REST/JSON
 
-**Задание:** реализовать интерфейс сервиса на протоколе, обоснованном в SIS #1 (gRPC / HTTP-2 / WebSocket), с идемпотентностью, таймаутами и повторными попытками; измерить задержку и размер payload относительно REST/JSON baseline.
+**Task:** implement the service interface using the protocol justified in SIS #1 (gRPC / HTTP-2 / WebSocket), with idempotency, timeouts and retries; measure latency and payload size against a REST/JSON baseline.
 
-**Реализация:** Python 3.12, FastAPI + Hypercorn (REST, HTTP/1.1 и HTTP/2), grpc.aio (gRPC), PostgreSQL 17, Redis 7.4. В задании указан Java — использование Python согласовывается с преподавателем.
+**Implementation:** Python 3.12, FastAPI + Hypercorn (REST over HTTP/1.1 and HTTP/2), grpc.aio (gRPC), PostgreSQL 17, Redis 7.4.
 
-## Главные результаты
+## Key results
 
-Карточка товара (`GET /products/{id}` / `GetProduct`), кеш Redis прогрет, медиана трёх повторов по 5000 запросов:
+Product card (`GET /products/{id}` / `GetProduct`), warm Redis cache, median of three runs of 5,000 requests each:
 
-| Вариант | p50, 1 поток | p99, 20 потоков | RPS, 20 потоков | Ответ |
+| Variant | p50, 1 client | p99, 20 clients | RPS, 20 clients | Response |
 |---|---|---|---|---|
-| REST/JSON, HTTP/1.1 (baseline) | 1.21 мс | 128.5 мс | 739 | 334 B |
-| REST/JSON, HTTP/2 | 1.53 мс | **28.4 мс** | 1078 | 334 B |
-| gRPC/Protobuf (HTTP/2) | **0.43 мс** | **6.6 мс** | **3769** | **172 B** |
+| REST/JSON, HTTP/1.1 (baseline) | 1.21 ms | 128.5 ms | 739 | 334 B |
+| REST/JSON, HTTP/2 | 1.53 ms | **28.4 ms** | 1078 | 334 B |
+| gRPC/Protobuf (HTTP/2) | **0.43 ms** | **6.6 ms** | **3769** | **172 B** |
 
-- **Payload:** Protobuf почти вдвое меньше JSON — карточка 172 B против 334 B (−48 %), страница из 20 товаров 3569 B против 6805 B (−48 %).
-- **HTTP/2 vs HTTP/1.1:** при одном потоке разницы нет (HTTP/2 даже чуть медленнее), при 20 параллельных запросах хвост задержки p99 у HTTP/2 в 4.5 раза короче, RPS выше в 1.5 раза — мультиплексирование в одном соединении.
-- **gRPC vs REST:** p50 карточки в 2.8 раза ниже, RPS при 20 потоках в 5 раз выше baseline. Выигрыш складывается из формата (Protobuf), транспорта (HTTP/2) и более лёгкого серверного стека — это не только эффект протокола (см. §6).
-- **Целевое значение SIS #1 (p99 < 80 мс)** при 20 параллельных запросах выдерживают HTTP/2 и gRPC; HTTP/1.1 — нет (128–184 мс).
+- **Payload:** Protobuf is about half the size of JSON — a product card is 172 B vs 334 B (−48%), a page of 20 products is 3569 B vs 6805 B (−48%).
+- **HTTP/2 vs HTTP/1.1:** with one client there is no gain (HTTP/2 is even slightly slower); with 20 concurrent requests the p99 tail of HTTP/2 is 4.5× shorter and RPS is 1.5× higher, thanks to multiplexing over a single connection.
+- **gRPC vs REST:** card p50 is 2.8× lower and RPS at 20 clients is 5× higher than the baseline. The gain comes from the format (Protobuf), the transport (HTTP/2) and a lighter server stack — not from the protocol alone (see §8).
+- **SIS #1 target (p99 < 80 ms)** at 20 concurrent requests is met by HTTP/2 and gRPC, but not by HTTP/1.1 (128–184 ms).
 
 ---
 
-## 1. Выбор протокола
+## 1. Protocol choice
 
-| Вариант | Роль | Транспорт | Формат |
+| Variant | Role | Transport | Format |
 |---|---|---|---|
-| REST/JSON по HTTP/1.1 | baseline | TLS, ALPN `http/1.1` | JSON |
-| REST/JSON по HTTP/2 | эффект транспорта | TLS, ALPN `h2` | JSON |
-| gRPC | эффект транспорта + формата | TLS, HTTP/2 | Protobuf |
+| REST/JSON over HTTP/1.1 | baseline | TLS, ALPN `http/1.1` | JSON |
+| REST/JSON over HTTP/2 | transport effect | TLS, ALPN `h2` | JSON |
+| gRPC | transport + format effect | TLS, HTTP/2 | Protobuf |
 
-Каталог в SIS #1 — read-heavy сервис (Read:Write = 500:1, 10k RPS чтения) с публичным REST API. Поэтому:
-- **HTTP/2** оставляет REST-контракт для внешних клиентов (браузер, мобильное приложение, CDN), но убирает ограничение «один запрос на соединение» — важно при большом числе параллельных запросов.
-- **gRPC** — для внутренних клиентов (другие сервисы, админка, интеграции): строгий контракт `.proto`, компактный бинарный формат, встроенные deadline и политика повторов.
-- **WebSocket** не выбран: каталог — запрос/ответ, без push-событий в реальном времени.
+The SIS #1 catalog is a read-heavy service (Read:Write = 500:1, 10k read RPS) with a public REST API. Therefore:
+- **HTTP/2** keeps the REST contract for external clients (browser, mobile app, CDN) but removes the one-request-per-connection limit, which matters under many concurrent requests.
+- **gRPC** is for internal clients (other services, admin panel, integrations): a strict `.proto` contract, a compact binary format, built-in deadlines and retry policy.
+- **WebSocket** was not chosen: the catalog is request/response, with no real-time push events.
 
-REST по HTTP/1.1 и HTTP/2 обслуживает **один и тот же** процесс Hypercorn на одном порту — протокол выбирает клиент при TLS-рукопожатии (ALPN). Так сравнение отличается только протоколом. gRPC тоже работает через TLS с тем же сертификатом.
+REST over HTTP/1.1 and HTTP/2 is served by **the same** Hypercorn process on one port — the client picks the protocol during the TLS handshake (ALPN), so the only difference is the protocol. gRPC also runs over TLS with the same certificate.
 
-## 2. Архитектура
+## 2. Architecture
 
 ```
-REST клиент ─┬─ HTTP/1.1 ─┐
+REST client ─┬─ HTTP/1.1 ─┐
              └─ HTTP/2 ───┤ Hypercorn :8443 (TLS) ── app/api/rest.py ─────────┐
-gRPC клиент ─── HTTP/2 ──── grpc.aio  :50051 (TLS) ── app/api/grpc_server.py ─┤
+gRPC client ─── HTTP/2 ──── grpc.aio  :50051 (TLS) ── app/api/grpc_server.py ─┤
                                                                               ▼
-                                                 app/services/service.py (общая бизнес-логика)
+                                                 app/services/service.py (shared business logic)
                                                     │                          │
                                            app/cache/cache.py          app/database/ (db.py, models.py)
-                                              Redis 7.4                PostgreSQL 17 (primary + мок реплики)
+                                              Redis 7.4                PostgreSQL 17 (primary + mocked replica)
                                                     ▲                          │ outbox
-                                                    └── DEL ── app/workers/outbox_worker.py ── reindex ──▶ app/services/search.py (мок OpenSearch)
+                                                    └── DEL ── app/workers/outbox_worker.py ── reindex ──▶ app/services/search.py (OpenSearch mock)
 ```
 
-Диаграммы потоков (чтение, запись с повторами, таймауты, outbox) — в [README.md](README.md). Компоненты SIS #1, которые не поднимаются (load balancer, CDN, S3, Kubernetes), там же отмечены отдельно; read replica и OpenSearch заменены моками.
+Flow diagrams are in [README.md](README.md). SIS #1 components that are not deployed (load balancer, CDN, S3, Kubernetes) are marked there separately; the read replica and OpenSearch are mocked.
 
-| Файл | Ответственность |
+| File | Responsibility |
 |---|---|
-| `app/database/models.py` | таблицы SQLAlchemy: `categories`, `products`, `idempotency_keys`, `outbox`; индексы |
-| `migrations/` | миграции Alembic |
-| `app/schemas.py` | Pydantic-модели API: `ProductOut`, `ProductCreate`, `ProductUpdate`, `Price` |
-| `app/services/service.py` | операции каталога, идемпотентность, версии, события outbox, инвалидация кеша |
-| `app/database/db.py` | пулы `Session` (primary, запись) и `ReadSession` (реплика, чтение; мок — та же БД) |
-| `app/workers/outbox_worker.py`, `app/services/search.py` | воркер outbox: `DEL` ключа Redis и reindex в мок OpenSearch |
-| `app/cache/cache.py` | Redis cache-aside, TTL с разбросом, кеш 404, работа при недоступном Redis |
-| `app/api/rest.py` | REST-маршруты, коды ошибок, middleware `Deadline` |
-| `proto/catalog.proto`, `app/api/grpc_server.py` | gRPC-контракт и сервер |
-| `app/clients.py` | REST/gRPC-клиенты с таймаутами и повторами |
-| `tests/`, `bench.py`, `devservers.py` | тесты, бенчмарк, запуск серверов для них |
+| `app/database/models.py` | SQLAlchemy tables: `categories`, `products`, `idempotency_keys`, `outbox`; indexes |
+| `migrations/` | Alembic migrations |
+| `app/schemas.py` | Pydantic API models: `ProductOut`, `ProductCreate`, `ProductUpdate`, `Price` |
+| `app/services/service.py` | catalog operations, idempotency, versioning, outbox events, cache invalidation |
+| `app/database/db.py` | pools `Session` (primary, writes) and `ReadSession` (replica, reads; mocked as the same DB) |
+| `app/workers/outbox_worker.py`, `app/services/search.py` | outbox worker: Redis `DEL` and reindex into the OpenSearch mock |
+| `app/cache/cache.py` | Redis cache-aside, TTL with jitter, 404 caching, works when Redis is down |
+| `app/api/rest.py` | REST routes, error codes, `Deadline` middleware |
+| `proto/catalog.proto`, `app/api/grpc_server.py` | gRPC contract and server |
+| `app/clients.py` | REST/gRPC clients with timeouts and retries |
+| `tests/`, `bench.py`, `devservers.py` | tests, benchmark, server launcher for both |
 
-Бизнес-правила написаны один раз в `service.py`. REST и gRPC только преобразуют входные данные и ошибки, поэтому возвращают одинаковые данные (проверено тестом).
+Business rules are written once in `service.py`. REST and gRPC only convert inputs and errors, so they return identical data (covered by a test).
 
-## 3. Контракт
+## 3. Contract
 
-| Операция | REST | gRPC |
+| Operation | REST | gRPC |
 |---|---|---|
-| Карточка | `GET /api/v1/products/{id}` | `GetProduct` |
-| Список | `GET /api/v1/products?category_id=&price_min=&price_max=&attr.color=&cursor=&limit=` | `ListProducts` |
-| Категории | `GET /api/v1/categories` | `ListCategories` |
-| Создание | `POST /api/v1/admin/products` + `Idempotency-Key` | `CreateProduct` + metadata `idempotency-key` |
-| Изменение | `PATCH /api/v1/admin/products/{id}` + `Idempotency-Key` + `If-Match: <version>` | `UpdateProduct` (`expected_version`, `update_mask`) |
-| Удаление (soft) | `DELETE /api/v1/admin/products/{id}` | `DeleteProduct` |
+| Card | `GET /api/v1/products/{id}` | `GetProduct` |
+| List | `GET /api/v1/products?category_id=&price_min=&price_max=&attr.color=&cursor=&limit=` | `ListProducts` |
+| Categories | `GET /api/v1/categories` | `ListCategories` |
+| Create | `POST /api/v1/admin/products` + `Idempotency-Key` | `CreateProduct` + `idempotency-key` metadata |
+| Update | `PATCH /api/v1/admin/products/{id}` + `Idempotency-Key` + `If-Match: <version>` | `UpdateProduct` (`expected_version`, `update_mask`) |
+| Delete (soft) | `DELETE /api/v1/admin/products/{id}` | `DeleteProduct` |
 
-- **Цена** хранится как `NUMERIC(12,2)`, в Python — `Decimal`, в JSON и Protobuf передаётся строкой (`"10.50"`) — без потерь точности float.
-- **Пагинация** — cursor (`id > cursor ORDER BY id LIMIT n`), индекс `(category_id, id) WHERE status='active'`; стоимость страницы не растёт с номером страницы, в отличие от `OFFSET`.
-- **PATCH** меняет только переданные поля (`exclude_unset`); `null` для поля → 422. В gRPC «какие поля менять» задаёт `google.protobuf.FieldMask`; поле не из списка разрешённых (например, `sku`) → `INVALID_ARGUMENT`.
+- **Price** is stored as `NUMERIC(12,2)`, held as `Decimal` in Python and sent as a string (`"10.50"`) in JSON and Protobuf — no float precision loss.
+- **Pagination** is cursor-based (`id > cursor ORDER BY id LIMIT n`) with index `(category_id, id) WHERE status='active'`; page cost does not grow with page number, unlike `OFFSET`.
+- **PATCH** changes only the fields sent (`exclude_unset`); `null` for a field → 422. In gRPC, `google.protobuf.FieldMask` lists the fields to change; a field outside the allowed set (e.g. `sku`) → `INVALID_ARGUMENT`.
 
-| Ситуация | REST | gRPC |
+| Situation | REST | gRPC |
 |---|---|---|
-| товара нет / удалён | 404 | `NOT_FOUND` |
-| устаревшая версия | 412 | `FAILED_PRECONDITION` |
-| ключ идемпотентности использован для другого запроса, неверные данные | 422 | `INVALID_ARGUMENT` |
-| SKU занят, нет категории | 409 | `ALREADY_EXISTS` |
-| БД/Redis недоступны, пул занят, injected fault | 503 + `Retry-After: 1` | `UNAVAILABLE` |
-| истёк общий срок запроса | 504 | `DEADLINE_EXCEEDED` |
+| product missing / deleted | 404 | `NOT_FOUND` |
+| stale version | 412 | `FAILED_PRECONDITION` |
+| idempotency key reused for another request, invalid data | 422 | `INVALID_ARGUMENT` |
+| SKU taken, unknown category | 409 | `ALREADY_EXISTS` |
+| DB/Redis unavailable, pool exhausted, injected fault | 503 + `Retry-After: 1` | `UNAVAILABLE` |
+| request deadline exceeded | 504 | `DEADLINE_EXCEEDED` |
 
-## 4. Идемпотентность, таймауты, повторы
+## 4. Idempotency, timeouts, retries
 
-### Идемпотентность (`app/services/service.py`)
-- Запись (`create`, `update`) требует ключ: `Idempotency-Key` (REST) или `idempotency-key` (gRPC metadata).
-- В **той же транзакции**, что и изменение товара, выполняется `INSERT INTO idempotency_keys ... ON CONFLICT DO NOTHING`, а после записи сохраняется нормализованный ответ. Товар и ключ фиксируются вместе или не фиксируются вовсе.
-- Повтор с тем же ключом и теми же данными → сохранённый ответ (заголовок/трейлер `idempotent-replayed: true`), без повторной записи и без повторного увеличения версии. Тот же ключ с другими данными → 422 / `INVALID_ARGUMENT`.
-- Хеш запроса строится из **провалидированных** данных (операция, id товара, ожидаемая версия, поля), а не из сырых байтов. `Price` приводит `10.5` и `"10.50"` к одному значению — поэтому повтор через **другой протокол** тоже распознаётся.
-- Параллельные дубли: второй `INSERT` того же ключа ждёт на первичном ключе, пока первая транзакция не завершится, и затем получает её результат.
-- DELETE идемпотентен по природе: повтор не находит активную строку и ничего не меняет (version и updated_at остаются прежними).
+### Idempotency (`app/services/service.py`)
+- Writes (`create`, `update`) require a key: `Idempotency-Key` (REST) or `idempotency-key` (gRPC metadata).
+- In **the same transaction** as the product change, `INSERT INTO idempotency_keys ... ON CONFLICT DO NOTHING` runs, and the normalized response is stored after the write. The product and the key are committed together or not at all.
+- A retry with the same key and the same data → the stored response (header/trailer `idempotent-replayed: true`), with no second write and no second version bump. The same key with different data → 422 / `INVALID_ARGUMENT`.
+- The request hash is built from **validated** data (operation, product id, expected version, fields), not raw bytes. `Price` normalizes `10.5` and `"10.50"` to the same value, so a retry over **the other protocol** is recognized too.
+- Concurrent duplicates: the second `INSERT` of the same key waits on the primary key until the first transaction ends, then receives its result.
+- DELETE is naturally idempotent: a repeat finds no active row and changes nothing (version and updated_at stay the same).
 
-### Конкурентные изменения
-`UPDATE ... WHERE id=? AND status='active' AND version=? ... RETURNING` — проверка версии и запись одним атомарным оператором. Если обновлено 0 строк, отдельный запрос различает «товара нет» (404) и «версия устарела» (412).
+### Concurrent updates
+`UPDATE ... WHERE id=? AND status='active' AND version=? ... RETURNING` checks the version and writes in one atomic statement. If 0 rows are updated, a separate query distinguishes "no such product" (404) from "stale version" (412).
 
-### Таймауты (значения из бюджета задержки SIS #1)
-| Уровень | Значение | Где |
+### Timeouts (values from the SIS #1 latency budget)
+| Level | Value | Where |
 |---|---|---|
-| Redis-команда | 10 мс | `socket_timeout` в `cache.py`; при ошибке — промах кеша, чтение из PostgreSQL |
-| SQL-запрос | 50 мс | `command_timeout` asyncpg |
-| Ожидание соединения из пула | 50 мс | `pool_timeout` SQLAlchemy |
-| Одна попытка клиента | 1 с | `clients.py` |
-| Весь запрос со всеми попытками | 3 с | клиент: `BUDGET`; сервер REST: `Deadline` (`X-Request-Timeout`); сервер gRPC: `context.time_remaining()` |
+| Redis command | 10 ms | `socket_timeout` in `cache.py`; on error — cache miss, read from PostgreSQL |
+| SQL query | 50 ms | asyncpg `command_timeout` |
+| Waiting for a pool connection | 50 ms | SQLAlchemy `pool_timeout` |
+| One client attempt | 1 s | `clients.py` |
+| Whole request incl. all attempts | 3 s | client: `BUDGET`; REST server: `Deadline` (`X-Request-Timeout`); gRPC server: `context.time_remaining()` |
 
-Сервер не работает дольше, чем клиент готов ждать: REST-клиент передаёт оставшееся время в `X-Request-Timeout`, gRPC — штатный deadline. По истечении срока обработка отменяется, ресурсы (соединение БД) освобождаются.
+The server never works longer than the client is willing to wait: the REST client sends the remaining time in `X-Request-Timeout`, gRPC uses its native deadline. When the deadline expires, processing is cancelled and resources (the DB connection) are released.
 
-### Повторы (`app/clients.py`)
-- **REST** — `rest_request()`: до 3 попыток, паузы ~100 и ~200 мс со случайным разбросом, общий бюджет 3 с на все попытки и паузы. Повторяются только 502/503/504 и сетевые ошибки; 4xx не повторяются. Запись повторяется с тем же `Idempotency-Key`.
-- **gRPC** — встроенная политика `retryPolicy` в `grpc.service_config` (3 попытки, backoff 0.1→0.2 с, только `UNAVAILABLE`). Повторы записи безопасны, потому что metadata с ключом идемпотентности повторяется вместе с вызовом.
-- **Проверка повторов** детерминирована: при `FAULT_INJECTION=true` заголовки `x-fault-id` / `x-fail-times: N` заставляют сервер ответить 503 / `UNAVAILABLE` ровно на первые N попыток.
+### Retries (`app/clients.py`)
+- **REST** — `rest_request()`: up to 3 attempts, ~100 and ~200 ms pauses with random jitter, a 3 s total budget for all attempts and pauses. Only 502/503/504 and network errors are retried; 4xx are not. Writes are retried with the same `Idempotency-Key`.
+- **gRPC** — the built-in `retryPolicy` in `grpc.service_config` (3 attempts, backoff 0.1→0.2 s, `UNAVAILABLE` only). Retrying writes is safe because the idempotency-key metadata is resent with the call.
+- **Retry testing** is deterministic: with `FAULT_INJECTION=true`, headers `x-fault-id` / `x-fail-times: N` make the server return 503 / `UNAVAILABLE` for exactly the first N attempts.
 
-## 5. Тесты
+## 5. Tests
 
-`make test` — 27 интеграционных тестов (pytest); сами поднимают REST и gRPC серверы через `devservers.py`. Все проходят, ~4–7 с.
+`make test` — 27 integration tests (pytest); they start the REST and gRPC servers themselves via `devservers.py`. All pass in ~4–7 s.
 
-| Группа | Что проверяется |
+| Group | What is checked |
 |---|---|
-| Протоколы | HTTP/2 согласован (`response.http_version == "HTTP/2"`); REST и gRPC возвращают одинаковый товар |
-| Чтение | cursor-пагинация без пропусков и дублей (страницы по 7 = страницы по 100); удалённый товар не виден |
-| Версии | из двух параллельных PATCH с одной версией успешен ровно один (200 + 412); несуществующий товар → 404, а не 412 |
-| Идемпотентность | 10 параллельных POST с одним ключом → один товар; повтор через gRPC после REST → тот же товар; повтор PATCH не увеличивает версию дважды; ключ с другим телом отклоняется в обоих протоколах; «ответ потерян, клиент повторил» → без дубля; повторный DELETE не меняет version/updated_at |
-| Откат транзакции | запись упала (занятый SKU, 409) → ключ идемпотентности тоже откатился, тот же ключ можно использовать снова |
-| Валидация | PATCH с `null` → 422; `update_mask` с `sku` → `INVALID_ARGUMENT` |
-| Повторы | 2 сбоя → успех (REST и gRPC); 5 сбоев → ровно 3 попытки и 503 / `UNAVAILABLE`; 404 не повторяется; повтор POST после сбоев создаёт один товар |
-| Таймауты | серверный срок REST → 504; клиентский бюджет ограничивает все попытки; gRPC deadline → `DEADLINE_EXCEEDED` |
-| Кеш | после GET ключ в Redis, после PATCH удалён и следующий GET отдаёт новые данные; 404 кешируется; при недоступном Redis каталог работает |
-| Outbox | create / update / delete пишут событие; воркер удаляет ключ из Redis, индексирует и удаляет документ в моке поиска, отмечает `processed_at` |
+| Protocols | HTTP/2 is negotiated (`response.http_version == "HTTP/2"`); REST and gRPC return the same product |
+| Reads | cursor pagination has no gaps or duplicates (pages of 7 = pages of 100); a deleted product is hidden |
+| Versioning | of two concurrent PATCHes with the same version exactly one wins (200 + 412); a missing product → 404, not 412 |
+| Idempotency | 10 concurrent POSTs with one key → one product; retry via gRPC after REST → same product; a repeated PATCH does not bump the version twice; a key with a different body is rejected in both protocols; "response lost, client retried" → no duplicate; a repeated DELETE does not change version/updated_at |
+| Rollback | a failed write (taken SKU, 409) → the idempotency key is rolled back too and can be reused |
+| Validation | PATCH with `null` → 422; `update_mask` with `sku` → `INVALID_ARGUMENT` |
+| Retries | 2 faults → success (REST and gRPC); 5 faults → exactly 3 attempts and 503 / `UNAVAILABLE`; 404 is not retried; a POST retried after faults creates one product |
+| Timeouts | REST server deadline → 504; the client budget bounds all attempts; gRPC deadline → `DEADLINE_EXCEEDED` |
+| Cache | after GET the key is in Redis; after PATCH it is deleted and the next GET returns fresh data; 404 is cached; the catalog works when Redis is down |
+| Outbox | create / update / delete write an event; the worker deletes the Redis key, indexes and removes the document in the search mock, sets `processed_at` |
 
-## 6. Методика измерений
+## 6. Benchmark method
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---|
-| Данные | 10 000 товаров, 100 категорий (`make seed`), одинаковые при каждом запуске |
-| Операции | `get` — карточка (id 1..500 по кругу); `list` — 20 товаров категории (90 категорий по кругу) |
-| Серия | 500 прогревочных + 5000 измеряемых запросов |
-| Конкурентность | 1 и 20 одновременных запросов |
-| Повторы | 3 серии на каждую комбинацию, в таблицах — медиана |
-| Режимы кеша | `on` (Redis прогрет на прогреве), `off` (`CACHE_ENABLED=false`, всё из PostgreSQL) |
-| Соединения | один клиент на вариант, соединения переиспользуются |
-| Отключено | повторы, fault injection, сжатие |
-| Сервер | 1 процесс Hypercorn, 1 процесс grpc.aio |
-| Payload | размер тела ответа: длина JSON и `ByteSize()` Protobuf, без HTTP-заголовков и TLS |
-| Стенд | Intel Core i5-11400H (12 потоков), 16 GB RAM, Linux 6.14; клиент, серверы, PostgreSQL и Redis на одной машине |
-| Версии | FastAPI 0.157, Hypercorn 0.18, h2 4.4, httpx 0.28, grpcio 1.84, protobuf 7.36, SQLAlchemy 2.1, asyncpg 0.32 |
+| Data | 10,000 products, 100 categories (`make seed`), identical on every run |
+| Operations | `get` — product card (ids 1..500 round-robin); `list` — 20 products of a category (90 categories round-robin) |
+| Series | 500 warm-up + 5,000 measured requests |
+| Concurrency | 1 and 20 concurrent requests |
+| Repeats | 3 series per combination, tables show the median |
+| Cache modes | `on` (Redis filled during warm-up), `off` (`CACHE_ENABLED=false`, everything from PostgreSQL) |
+| Connections | one client per variant, connections are reused |
+| Disabled | retries, fault injection, compression |
+| Server | 1 Hypercorn process, 1 grpc.aio process |
+| Payload | response body size: JSON length and Protobuf `ByteSize()`, excluding HTTP headers and TLS |
+| Machine | Intel Core i5-11400H (12 threads), 16 GB RAM, Linux 6.14; client, servers, PostgreSQL and Redis on one machine |
+| Versions | FastAPI 0.157, Hypercorn 0.18, h2 4.4, httpx 0.28, grpcio 1.84, protobuf 7.36, SQLAlchemy 2.1, asyncpg 0.32 |
 
-Запуск: `make bench` → `benchmarks/results.csv` (все 72 серии) и `benchmarks/results.md` (медианы).
+Run: `make bench` → `benchmarks/results.csv` (all 72 series) and `benchmarks/results.md` (medians).
 
-## 7. Результаты
+## 7. Results
 
-### 7.1 Размер payload
+### 7.1 Payload size
 
-| Ответ | JSON | Protobuf | Разница |
+| Response | JSON | Protobuf | Difference |
 |---|---|---|---|
-| Карточка товара | 334 B | 172 B | −48 % |
-| Страница из 20 товаров | 6805 B | 3569 B | −48 % |
+| Product card | 334 B | 172 B | −48% |
+| Page of 20 products | 6805 B | 3569 B | −48% |
 
-HTTP/1.1 и HTTP/2 передают одинаковое JSON-тело. Protobuf экономит на именах полей (номера тегов вместо строк `"category_id"`), числах (varint вместо текста) и датах (`Timestamp` из двух чисел вместо ISO-строки).
+HTTP/1.1 and HTTP/2 carry the same JSON body. Protobuf saves on field names (tag numbers instead of strings like `"category_id"`), numbers (varint instead of text) and dates (`Timestamp` as two integers instead of an ISO string).
 
-### 7.2 Задержка и пропускная способность — кеш включён
+### 7.2 Latency and throughput — cache on
 
-| Операция | Потоки | Вариант | p50 мс | p95 мс | p99 мс | RPS | Ошибки |
+| Operation | Clients | Variant | p50 ms | p95 ms | p99 ms | RPS | Errors |
 |---|---|---|---|---|---|---|---|
 | get | 1 | REST HTTP/1.1 | 1.21 | 1.49 | 1.73 | 806 | 0 |
 | get | 1 | REST HTTP/2 | 1.53 | 1.85 | 2.12 | 638 | 0 |
@@ -186,9 +186,9 @@ HTTP/1.1 и HTTP/2 передают одинаковое JSON-тело. Protobuf
 | list | 20 | REST HTTP/2 | 33.15 | 56.80 | 73.80 | 564 | 0 |
 | list | 20 | gRPC | **26.41** | **27.76** | **28.70** | **755** | 0 |
 
-### 7.3 Задержка и пропускная способность — кеш выключен
+### 7.3 Latency and throughput — cache off
 
-| Операция | Потоки | Вариант | p50 мс | p95 мс | p99 мс | RPS | Ошибки |
+| Operation | Clients | Variant | p50 ms | p95 ms | p99 ms | RPS | Errors |
 |---|---|---|---|---|---|---|---|
 | get | 1 | REST HTTP/1.1 | 1.90 | 2.17 | 2.40 | 522 | 0 |
 | get | 1 | REST HTTP/2 | 2.05 | 2.31 | 2.50 | 480 | 0 |
@@ -203,60 +203,60 @@ HTTP/1.1 и HTTP/2 передают одинаковое JSON-тело. Protobuf
 | list | 20 | REST HTTP/2 | 30.36 | 45.35 | 64.56 | 621 | 0 |
 | list | 20 | gRPC | **24.68** | **27.35** | **32.27** | **795** | 0 |
 
-Ошибок за все 72 серии (396 000 запросов) — 1: ответ 503 у HTTP/1.1 при 20 потоках (см. §8).
+Errors across all 72 series (396,000 requests): 1 — a 503 for HTTP/1.1 at 20 clients (see §8).
 
-## 8. Анализ
+## 8. Analysis
 
-**HTTP/1.1 → HTTP/2 (влияние транспорта, формат тот же JSON).**
-- При **одном** запросе за раз HTTP/2 не быстрее, а на 0.1–0.6 мс медленнее: мультиплексировать нечего, а кадрирование HTTP/2 (библиотека `h2` написана на Python и в клиенте, и в сервере) дороже простого текстового HTTP/1.1. Заголовков мало, экономия HPACK незаметна.
-- При **20** параллельных запросах медиана близка, но **хвост** различается в 2.5–4.5 раза: p99 карточки 128 мс у HTTP/1.1 и 28 мс у HTTP/2. HTTP/1.1 обслуживает 20 запросов через 20 отдельных TCP+TLS соединений, каждое — строго по одному запросу; планирование между соединениями неравномерное, часть запросов ждёт долго. HTTP/2 ведёт все 20 запросов потоками одного соединения. p99 стабилен по повторам (HTTP/1.1, 20 потоков: 125–215 мс во всех 12 сериях) — это свойство протокола, а не шум.
-- Только у HTTP/1.1 при 20 потоках появляются 503 (1 в итоговом прогоне, ~0.25 % в отдельной проверке): 20 соединений одновременно обращаются к пулу БД из 10 соединений, запрос, не получивший соединение за 50 мс, получает отказ — это задуманная защита от перегрузки (load shedding), а не сбой.
+**HTTP/1.1 → HTTP/2 (transport effect, same JSON format).**
+- With **one** request at a time HTTP/2 is not faster but 0.1–0.6 ms slower: there is nothing to multiplex, and HTTP/2 framing (the `h2` library is pure Python on both client and server) costs more than plain-text HTTP/1.1. Headers are small, so HPACK savings are negligible.
+- With **20** concurrent requests the medians are close, but the **tail** differs 2.5–4.5×: card p99 is 128 ms for HTTP/1.1 and 28 ms for HTTP/2. HTTP/1.1 serves 20 requests over 20 separate TCP+TLS connections, each strictly one request at a time; scheduling across connections is uneven and some requests wait long. HTTP/2 carries all 20 requests as streams of one connection. The p99 is stable across runs (HTTP/1.1, 20 clients: 125–215 ms in all 12 series), so it is a protocol property, not noise.
+- Only HTTP/1.1 at 20 clients produces 503s (1 in the final run, ~0.25% in a separate check): 20 connections hit the 10-connection DB pool at once, and a request that gets no connection within 50 ms is rejected — intended load shedding, not a failure.
 
-**REST/HTTP/2 → gRPC (влияние формата и стека).**
-- Карточка из кеша: p50 0.43 мс против 1.53 мс, RPS при 20 потоках 3769 против 1078. На коротком запросе доминирует стоимость обработки: FastAPI (маршрутизация, middleware, валидация `ProductOut` Pydantic, JSON) и `h2` на Python против grpc.aio, где HTTP/2 и сериализация Protobuf реализованы на C++.
-- На списке разница меньше (p50 1.98 против 3.34 мс; при 20 потоках p50 26 против 33 мс): время уходит в SQL-запрос, который одинаков для всех вариантов. Чем больше доля работы БД, тем меньше значение протокола.
-- Поэтому разницу gRPC ↔ REST **нельзя приписывать только HTTP/2**: она включает формат сериализации, клиентские библиотеки (grpcio vs httpx) и серверный стек (grpc.aio vs Hypercorn+FastAPI).
+**REST/HTTP/2 → gRPC (format and stack effect).**
+- Cached card: p50 0.43 ms vs 1.53 ms, RPS at 20 clients 3769 vs 1078. For a short request the processing cost dominates: FastAPI (routing, middleware, Pydantic `ProductOut` validation, JSON) and pure-Python `h2` vs grpc.aio, where HTTP/2 and Protobuf serialization are implemented in C++.
+- For the list the gap is smaller (p50 1.98 vs 3.34 ms; at 20 clients p50 26 vs 33 ms): time goes into the SQL query, which is the same for all variants. The larger the database share of the work, the less the protocol matters.
+- So the gRPC ↔ REST difference **cannot be attributed to HTTP/2 alone**: it includes the serialization format, the client libraries (grpcio vs httpx) and the server stack (grpc.aio vs Hypercorn + FastAPI).
 
-**Кеш.** Redis снижает p50 карточки на ~0.5–0.7 мс (REST HTTP/1.1: 1.90 → 1.21 мс; gRPC: 0.96 → 0.43 мс) и поднимает RPS gRPC при 20 потоках с 1459 до 3769. Список не кешируется, его цифры в обоих режимах совпадают в пределах разброса.
+**Cache.** Redis lowers card p50 by ~0.5–0.7 ms (REST HTTP/1.1: 1.90 → 1.21 ms; gRPC: 0.96 → 0.43 ms) and raises gRPC RPS at 20 clients from 1459 to 3769. The list is not cached; its numbers match in both modes within noise.
 
-**Цели SIS #1.** p99 < 80 мс при 20 параллельных запросах: HTTP/2 (28–74 мс) и gRPC (6.6–32 мс) — да, HTTP/1.1 (128–184 мс) — нет. Цели 10 000 RPS относятся к кластеру из 12–24 подов; один процесс на ноутбуке даёт 740–3770 RPS на карточку — в расчёте SIS #1 закладывалось 1000 RPS на под.
+**SIS #1 targets.** p99 < 80 ms at 20 concurrent requests: HTTP/2 (28–74 ms) and gRPC (6.6–32 ms) — yes, HTTP/1.1 (128–184 ms) — no. The 10,000 RPS target applies to a cluster of 12–24 pods; one process on a laptop gives 740–3770 RPS for the card, while SIS #1 assumed 1000 RPS per pod.
 
-## 9. Найденные при измерениях проблемы
+## 9. Issues found during measurement
 
-1. **Ошибки HTTP/2 каждые 1000 запросов.** Первый прогон показал ровно 5 ошибок на 5000 запросов при 1 потоке и ~100 при 20. Причина: Hypercorn по умолчанию закрывает соединение после 1000 запросов (`keep_alive_max_requests = 1000`), для HTTP/2 — кадром GOAWAY, и httpx роняет потоки, которые в этот момент в полёте. Исправлено в `hypercorn.toml` (`keep_alive_max_requests = 1000000`), во втором прогоне ошибок HTTP/2 — 0. В продакшене такие ошибки закрывает клиентский повтор (`rest_request` повторяет сетевые ошибки).
-2. **504 после начала ответа.** Если срок истекал, когда ответ уже начал отправляться, `Deadline` пытался отправить второй ответ и сервер логировал ошибку. Исправлено: middleware запоминает, начат ли ответ, и в этом случае просто закрывает поток.
+1. **HTTP/2 errors every 1000 requests.** The first run showed exactly 5 errors per 5,000 requests at 1 client and ~100 at 20. Cause: Hypercorn closes a connection after 1000 requests by default (`keep_alive_max_requests = 1000`), for HTTP/2 with a GOAWAY frame, and httpx drops the streams in flight at that moment. Fixed in `hypercorn.toml` (`keep_alive_max_requests = 1000000`); the second run had 0 HTTP/2 errors. In production the client retry covers such errors (`rest_request` retries network errors).
+2. **504 after the response started.** If the deadline expired while the response was already being sent, `Deadline` tried to send a second response and the server logged an error. Fixed: the middleware tracks whether the response has started and, if so, just closes the stream.
 
-## 10. Ограничения
+## 10. Limitations
 
-- Клиент, серверы, PostgreSQL и Redis работают на одной машине и делят CPU; при 20 потоках часть задержки — сам Python-клиент. Сеть — loopback, без реальных задержек и потерь (влияние потерь на HTTP/1.1 и HTTP/2 измерено в practice-2: TCP head-of-line blocking ухудшает хвост HTTP/2).
-- Размер payload — размер тела сообщения; заголовки HTTP, HPACK и TLS не учитываются.
-- Инвалидация кеша: прямой `DEL` после commit (быстрый путь) плюс событие outbox в той же транзакции, которое воркер обрабатывает за ~0.2 с, даже если процесс API упал между commit и `DEL` или Redis был недоступен. Остаётся гонка «чтение записало старую версию сразу после `DEL`»: её закрывает `DEL` воркера, если он выполнится позже, иначе карточка живёт до конца TTL (~72 с). Цена при оформлении заказа должна читаться из primary.
-- Бенчмарк (§7) снят до добавления outbox и `ReadSession`; путь чтения не изменился (отдельный пул к той же БД), а запись добавляет один `INSERT` в транзакцию.
-- Моки: read replica — отдельный пул к той же БД (нет лага репликации); OpenSearch — `FakeSearchIndex` в памяти воркера, список товаров строится из PostgreSQL (fallback-режим SIS #1), фасетов нет. Один воркер outbox: порядок событий сохраняется; при нескольких воркерах (`SKIP LOCKED`) порядок по товару не гарантирован. Обработанные события не удаляются.
-- Нет защиты от одновременного промаха по горячему ключу (stampede / single-flight), load balancer, CDN, Kubernetes, авторизации администратора — вне объёма SIS #2.
-- Записи `idempotency_keys` не удаляются; в продакшене нужна очистка по `created_at` (например, старше 24 ч).
+- Client, servers, PostgreSQL and Redis share one machine and its CPU; at 20 clients part of the latency is the Python client itself. The network is loopback, with no real delay or loss (the effect of loss on HTTP/1.1 vs HTTP/2 was measured in practice-2: TCP head-of-line blocking worsens the HTTP/2 tail).
+- Payload size is the message body only; HTTP headers, HPACK and TLS are not counted.
+- Cache invalidation: a direct `DEL` after commit (fast path) plus an outbox event in the same transaction, which the worker processes within ~0.2 s even if the API process crashed between commit and `DEL` or Redis was down. One race remains — a read that writes the old version right after `DEL`: the worker's `DEL` covers it if it runs later; otherwise the card lives until TTL expiry (~72 s). Checkout must read the price from the primary.
+- The benchmark (§7) was taken before outbox and `ReadSession` were added; the read path is unchanged (a separate pool to the same DB), and writes add one `INSERT` to the transaction.
+- Mocks: the read replica is a separate pool to the same DB (no replication lag); OpenSearch is `FakeSearchIndex` in the worker's memory, the product list is served from PostgreSQL (the SIS #1 fallback mode), no facets. With a single outbox worker event order is preserved; with several workers (`SKIP LOCKED`) per-product order is not guaranteed. Processed events are not deleted.
+- Not covered (out of SIS #2 scope): protection against a hot-key miss stampede (single-flight), load balancer, CDN, Kubernetes, admin authorization.
+- `idempotency_keys` rows are never deleted; production needs cleanup by `created_at` (e.g. older than 24 h).
 
-## 11. Воспроизведение
+## 11. Reproduce
 
-```fish
+```bash
 uv sync
 make up            # PostgreSQL + Redis
-make migrate       # таблицы (Alembic)
-make seed          # 100 категорий, 10 000 товаров (make seed COUNT=1000000 — 1 млн)
-make certs         # самоподписанный TLS-сертификат для localhost
-make proto         # код gRPC из proto/catalog.proto
+make migrate       # tables (Alembic)
+make seed          # 100 categories, 10,000 products (make seed COUNT=1000000 for 1M)
+make certs         # self-signed TLS certificate for localhost
+make proto         # gRPC code from proto/catalog.proto
 
 make rest-tls      # REST: https://localhost:8443 (HTTP/1.1 + HTTP/2)
 make grpc          # gRPC: localhost:50051 (TLS)
-make rest          # REST для разработки: http://127.0.0.1:8000, /docs
+make rest          # REST for development: http://127.0.0.1:8000, /docs
 make outbox        # outbox worker
 
-make test          # 27 интеграционных тестов (поднимают серверы сами)
-make bench         # бенчмарк, ~12 минут → benchmarks/
+make test          # 27 integration tests (start the servers themselves)
+make bench         # benchmark, ~12 minutes → benchmarks/
 ```
 
-Проверка протокола вручную:
-```fish
+Manual protocol check:
+```bash
 curl -sv --http1.1 --cacert certs/cert.pem https://localhost:8443/api/v1/products/1 2>&1 | grep "< HTTP"
 curl -sv --http2   --cacert certs/cert.pem https://localhost:8443/api/v1/products/1 2>&1 | grep "< HTTP"
 ```
