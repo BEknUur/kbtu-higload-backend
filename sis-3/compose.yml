@@ -10,6 +10,27 @@ services:
       interval: 2s
       retries: 30
 
+  pgbouncer:
+    build:
+      dockerfile_inline: |
+        FROM postgres:17
+        RUN apt-get update && apt-get install -y --no-install-recommends pgbouncer \
+            && rm -rf /var/lib/apt/lists/*
+        USER postgres
+        ENTRYPOINT ["pgbouncer", "/etc/pgbouncer/pgbouncer.ini"]
+    configs:
+      - source: pgbouncer-ini
+        target: /etc/pgbouncer/pgbouncer.ini
+      - source: pgbouncer-users
+        target: /etc/pgbouncer/userlist.txt
+    depends_on:
+      primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432"]
+      interval: 2s
+      retries: 30
+
   bench:
     profiles: [bench]
     build:
@@ -19,3 +40,23 @@ services:
     volumes:
       - ./benchmark/bench.py:/bench.py:ro
     command: [python, /bench.py]
+
+configs:
+  pgbouncer-ini:
+    content: |
+      [databases]
+      ${POSTGRES_DB} = host=primary port=5432
+      ${POSTGRES_DB}_ro = host=replica port=5432 dbname=${POSTGRES_DB}
+
+      [pgbouncer]
+      listen_addr = 0.0.0.0
+      listen_port = 6432
+      auth_type = scram-sha-256
+      auth_file = /etc/pgbouncer/userlist.txt
+      pool_mode = transaction
+      default_pool_size = 20
+      max_client_conn = 1000
+      max_prepared_statements = 200
+  pgbouncer-users:
+    content: |
+      "${POSTGRES_USER}" "${POSTGRES_PASSWORD}"
