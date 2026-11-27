@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Usage: bash run.sh [stage ...]
-# Stages so far: baseline indexed. Each stage = fresh database + all changes up to it.
+# Stages so far: baseline indexed partitioned. Each stage = fresh database + all changes up to it.
 set -euo pipefail
 cd "$(dirname "$0")"
 source .env
 
-STAGES=${*:-baseline indexed}
+STAGES=${*:-baseline indexed partitioned}
 RATES=${RATES:-500 1000 2000}
 LOGIN="$POSTGRES_USER:$POSTGRES_PASSWORD"
 DIRECT="postgres://$LOGIN@primary:5432/$POSTGRES_DB"
@@ -14,17 +14,20 @@ sql() {
   docker compose exec -T primary psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"
 }
 
-bench() {  # bench <stage> <rate> <read url> <write url>
+bench() { 
   docker compose run --rm -T -e POOL="${POOL:-80}" \
     -e STAGE="$1" -e RATE="$2" -e READ_URL="$3" -e WRITE_URL="$4" \
     bench
 }
 
-prepare() {  # fresh database with every change up to this stage
+prepare() {
   sql < sql/01_schema.sql
   sql < sql/02_seed.sql
   if [[ $1 != baseline ]]; then
     sql < sql/03_indexes.sql
+  fi
+  if [[ $1 == partitioned ]]; then
+    sql < sql/04_partitioning.sql
   fi
   sql < sql/05_explain.sql > "results/$1-explain.txt"
 }
@@ -42,6 +45,9 @@ for stage in $STAGES; do
 
   echo "=== $stage: fresh database"
   prepare "$stage"
+  if [[ $stage == indexed || $stage == partitioned ]]; then
+    sql < sql/06_retention.sql > "results/$stage-retention.txt"
+  fi
 
   echo "=== $stage: warm-up"
   bench warmup 500 "$read_url" "$write_url"

@@ -1,93 +1,93 @@
 === get: product card by id
                                                         QUERY PLAN                                                        
 --------------------------------------------------------------------------------------------------------------------------
- Index Scan using products_pkey on products  (cost=0.42..8.44 rows=1 width=110) (actual time=0.031..0.031 rows=1 loops=1)
+ Index Scan using products_pkey on products  (cost=0.42..8.44 rows=1 width=110) (actual time=0.032..0.033 rows=1 loops=1)
    Index Cond: (id = 500000)
    Buffers: shared hit=3 read=4
  Planning:
    Buffers: shared hit=146 read=2
- Planning Time: 0.336 ms
+ Planning Time: 0.333 ms
  Execution Time: 0.072 ms
 (7 rows)
 
 === list_category: popular category 11, page after id 500000
                                                                QUERY PLAN                                                               
 ----------------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=0.42..11.36 rows=20 width=28) (actual time=0.022..0.083 rows=20 loops=1)
+ Limit  (cost=0.42..11.22 rows=20 width=28) (actual time=0.022..0.082 rows=20 loops=1)
    Buffers: shared hit=4 read=8
-   ->  Index Scan using products_pkey on products  (cost=0.42..25553.21 rows=46754 width=28) (actual time=0.020..0.080 rows=20 loops=1)
+   ->  Index Scan using products_pkey on products  (cost=0.42..25899.14 rows=47992 width=28) (actual time=0.021..0.080 rows=20 loops=1)
          Index Cond: (id > 500000)
          Filter: ((category_id = 11) AND (status = 'active'::text))
          Rows Removed by Filter: 315
          Buffers: shared hit=4 read=8
  Planning:
    Buffers: shared hit=34
- Planning Time: 0.095 ms
- Execution Time: 0.093 ms
+ Planning Time: 0.097 ms
+ Execution Time: 0.090 ms
 (11 rows)
 
 === list_category: rare category 100, page after id 500000
                                                                 QUERY PLAN                                                                
 ------------------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=0.42..76.18 rows=20 width=28) (actual time=0.022..0.080 rows=20 loops=1)
+ Limit  (cost=0.42..76.88 rows=20 width=28) (actual time=0.021..0.078 rows=20 loops=1)
    Buffers: shared hit=3 read=16
-   ->  Index Scan using products_category on products  (cost=0.42..9189.20 rows=2426 width=28) (actual time=0.022..0.078 rows=20 loops=1)
+   ->  Index Scan using products_category on products  (cost=0.42..7863.85 rows=2057 width=28) (actual time=0.021..0.077 rows=20 loops=1)
          Index Cond: ((category_id = 100) AND (id > 500000))
          Buffers: shared hit=3 read=16
  Planning Time: 0.050 ms
- Execution Time: 0.087 ms
+ Execution Time: 0.085 ms
 (7 rows)
 
 === list_filter: rare category 100, price 100..110
                                                                   QUERY PLAN                                                                  
 ----------------------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=214.83..214.88 rows=20 width=28) (actual time=0.226..0.228 rows=20 loops=1)
+ Limit  (cost=161.19..161.24 rows=20 width=28) (actual time=0.224..0.226 rows=20 loops=1)
    Buffers: shared hit=3 read=42
-   ->  Sort  (cost=214.83..214.97 rows=54 width=28) (actual time=0.225..0.226 rows=20 loops=1)
+   ->  Sort  (cost=161.19..161.29 rows=40 width=28) (actual time=0.224..0.225 rows=20 loops=1)
          Sort Key: id
          Sort Method: quicksort  Memory: 27kB
          Buffers: shared hit=3 read=42
-         ->  Bitmap Heap Scan on products  (cost=5.11..213.40 rows=54 width=28) (actual time=0.035..0.205 rows=39 loops=1)
+         ->  Bitmap Heap Scan on products  (cost=4.93..160.13 rows=40 width=28) (actual time=0.037..0.207 rows=39 loops=1)
                Recheck Cond: ((category_id = 100) AND (price >= '100'::numeric) AND (price <= '110'::numeric) AND (status = 'active'::text))
                Heap Blocks: exact=39
                Buffers: shared read=42
-               ->  Bitmap Index Scan on products_category_price  (cost=0.00..5.10 rows=54 width=0) (actual time=0.024..0.024 rows=39 loops=1)
+               ->  Bitmap Index Scan on products_category_price  (cost=0.00..4.92 rows=40 width=0) (actual time=0.026..0.026 rows=39 loops=1)
                      Index Cond: ((category_id = 100) AND (price >= '100'::numeric) AND (price <= '110'::numeric))
                      Buffers: shared read=3
  Planning:
    Buffers: shared hit=10
- Planning Time: 0.066 ms
- Execution Time: 0.241 ms
+ Planning Time: 0.061 ms
+ Execution Time: 0.239 ms
 (17 rows)
 
 === write: price change + event in outbox
                                                               QUERY PLAN                                                               
 ---------------------------------------------------------------------------------------------------------------------------------------
- Insert on outbox  (cost=8.45..8.48 rows=0 width=0) (actual time=0.320..0.321 rows=0 loops=1)
+ Insert on outbox  (cost=8.45..8.48 rows=0 width=0) (actual time=0.329..0.330 rows=0 loops=1)
    Buffers: shared hit=71 read=10 dirtied=8 written=1
    CTE changed
-     ->  Update on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.167..0.168 rows=1 loops=1)
+     ->  Update on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.173..0.174 rows=1 loops=1)
            Buffers: shared hit=28 read=8 dirtied=6
-           ->  Index Scan using products_pkey on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.007..0.007 rows=1 loops=1)
+           ->  Index Scan using products_pkey on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.006..0.007 rows=1 loops=1)
                  Index Cond: (id = 500000)
                  Buffers: shared hit=4
-   ->  CTE Scan on changed  (cost=0.00..0.03 rows=1 width=96) (actual time=0.204..0.205 rows=1 loops=1)
+   ->  CTE Scan on changed  (cost=0.00..0.03 rows=1 width=96) (actual time=0.211..0.212 rows=1 loops=1)
          Buffers: shared hit=37 read=9 dirtied=6
  Planning Time: 0.046 ms
- Execution Time: 0.357 ms
+ Execution Time: 0.365 ms
 (12 rows)
 
 === outbox worker: pending events of the last 7 days
                                                           QUERY PLAN                                                          
 ------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=0.14..4.17 rows=1 width=16) (actual time=0.002..0.003 rows=0 loops=1)
+ Limit  (cost=0.14..4.17 rows=1 width=16) (actual time=0.003..0.003 rows=0 loops=1)
    Buffers: shared hit=3
-   ->  Index Scan using outbox_pending on outbox  (cost=0.14..4.17 rows=1 width=16) (actual time=0.002..0.002 rows=0 loops=1)
+   ->  Index Scan using outbox_pending on outbox  (cost=0.14..4.17 rows=1 width=16) (actual time=0.003..0.003 rows=0 loops=1)
          Filter: (created_at > (now() - '7 days'::interval))
          Buffers: shared hit=3
  Planning:
    Buffers: shared hit=25
- Planning Time: 0.059 ms
- Execution Time: 0.007 ms
+ Planning Time: 0.060 ms
+ Execution Time: 0.008 ms
 (9 rows)
 
