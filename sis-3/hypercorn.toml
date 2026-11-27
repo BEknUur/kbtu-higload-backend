@@ -1,0 +1,4 @@
+bind = ["127.0.0.1:8443"]
+certfile = "certs/cert.pem"
+keyfile = "certs/key.pem"
+keep_alive_max_requests = 1000000
