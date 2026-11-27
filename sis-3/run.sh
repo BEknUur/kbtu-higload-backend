@@ -58,7 +58,7 @@ for stage in $STAGES; do
       write_url=$BOUNCER
       ;;
     replica)
-      docker compose up -d --wait pgbouncer replica
+      docker compose up -d --wait --force-recreate pgbouncer replica
       read_url=$BOUNCER_RO
       write_url=$BOUNCER
       lag_monitor > results/replica-lag.txt &
