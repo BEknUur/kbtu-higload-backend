@@ -1,101 +1,101 @@
 === get: product card by id
                                                         QUERY PLAN                                                        
 --------------------------------------------------------------------------------------------------------------------------
- Index Scan using products_pkey on products  (cost=0.42..8.44 rows=1 width=110) (actual time=0.026..0.026 rows=1 loops=1)
+ Index Scan using products_pkey on products  (cost=0.42..8.44 rows=1 width=110) (actual time=0.030..0.030 rows=1 loops=1)
    Index Cond: (id = 500000)
    Buffers: shared hit=3 read=4
  Planning:
    Buffers: shared hit=103 read=1
- Planning Time: 0.222 ms
- Execution Time: 0.070 ms
+ Planning Time: 0.218 ms
+ Execution Time: 0.074 ms
 (7 rows)
 
 === list_category: popular category 11, page after id 500000
                                                                QUERY PLAN                                                               
 ----------------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=0.42..11.24 rows=20 width=28) (actual time=0.023..0.082 rows=20 loops=1)
+ Limit  (cost=0.42..11.49 rows=20 width=28) (actual time=0.019..0.081 rows=20 loops=1)
    Buffers: shared hit=4 read=8
-   ->  Index Scan using products_pkey on products  (cost=0.42..25731.82 rows=47603 width=28) (actual time=0.023..0.080 rows=20 loops=1)
+   ->  Index Scan using products_pkey on products  (cost=0.42..25734.29 rows=46511 width=28) (actual time=0.018..0.079 rows=20 loops=1)
          Index Cond: (id > 500000)
          Filter: ((category_id = 11) AND (status = 'active'::text))
          Rows Removed by Filter: 315
          Buffers: shared hit=4 read=8
  Planning:
    Buffers: shared hit=25
- Planning Time: 0.057 ms
- Execution Time: 0.090 ms
+ Planning Time: 0.058 ms
+ Execution Time: 0.093 ms
 (11 rows)
 
 === list_category: rare category 100, page after id 500000
                                                               QUERY PLAN                                                               
 ---------------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=0.42..217.57 rows=20 width=28) (actual time=0.010..0.589 rows=20 loops=1)
+ Limit  (cost=0.42..187.51 rows=20 width=28) (actual time=0.016..0.589 rows=20 loops=1)
    Buffers: shared hit=12 read=65
-   ->  Index Scan using products_pkey on products  (cost=0.42..25731.82 rows=2370 width=28) (actual time=0.010..0.587 rows=20 loops=1)
+   ->  Index Scan using products_pkey on products  (cost=0.42..25734.29 rows=2751 width=28) (actual time=0.015..0.587 rows=20 loops=1)
          Index Cond: (id > 500000)
          Filter: ((category_id = 100) AND (status = 'active'::text))
          Rows Removed by Filter: 3431
          Buffers: shared hit=12 read=65
- Planning Time: 0.026 ms
- Execution Time: 0.595 ms
+ Planning Time: 0.029 ms
+ Execution Time: 0.596 ms
 (9 rows)
 
 === list_filter: rare category 100, price 100..110
                                                                      QUERY PLAN                                                                      
 -----------------------------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=1000.45..19145.03 rows=20 width=28) (actual time=121.722..126.698 rows=20 loops=1)
-   Buffers: shared hit=2361 read=21142 written=14672
-   ->  Gather Merge  (cost=1000.45..43640.21 rows=47 width=28) (actual time=121.720..126.696 rows=20 loops=1)
+ Limit  (cost=1000.45..16229.30 rows=20 width=28) (actual time=112.285..117.034 rows=20 loops=1)
+   Buffers: shared hit=2532 read=21088 written=14772
+   ->  Gather Merge  (cost=1000.45..43641.25 rows=56 width=28) (actual time=112.284..117.031 rows=20 loops=1)
          Workers Planned: 2
          Workers Launched: 2
-         Buffers: shared hit=2361 read=21142 written=14672
-         ->  Parallel Index Scan using products_pkey on products  (cost=0.42..42634.76 rows=20 width=28) (actual time=9.992..75.660 rows=13 loops=3)
+         Buffers: shared hit=2532 read=21088 written=14772
+         ->  Parallel Index Scan using products_pkey on products  (cost=0.42..42634.76 rows=23 width=28) (actual time=7.160..77.798 rows=13 loops=3)
                Filter: ((price >= '100'::numeric) AND (price <= '110'::numeric) AND (category_id = 100) AND (status = 'active'::text))
-               Rows Removed by Filter: 333317
-               Buffers: shared hit=2361 read=21142 written=14672
+               Rows Removed by Filter: 333258
+               Buffers: shared hit=2532 read=21088 written=14772
  Planning:
    Buffers: shared hit=10
- Planning Time: 0.051 ms
- Execution Time: 126.715 ms
+ Planning Time: 0.053 ms
+ Execution Time: 117.047 ms
 (14 rows)
 
 === write: price change + event in outbox
                                                               QUERY PLAN                                                               
 ---------------------------------------------------------------------------------------------------------------------------------------
- Insert on outbox  (cost=8.45..8.48 rows=0 width=0) (actual time=0.283..0.284 rows=0 loops=1)
+ Insert on outbox  (cost=8.45..8.48 rows=0 width=0) (actual time=0.241..0.241 rows=0 loops=1)
    Buffers: shared hit=50 read=12 dirtied=4
    CTE changed
-     ->  Update on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.162..0.163 rows=1 loops=1)
+     ->  Update on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.147..0.148 rows=1 loops=1)
            Buffers: shared hit=23 read=7 dirtied=4
-           ->  Index Scan using products_pkey on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.007..0.008 rows=1 loops=1)
+           ->  Index Scan using products_pkey on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.007..0.007 rows=1 loops=1)
                  Index Cond: (id = 500000)
                  Buffers: shared hit=4
-   ->  CTE Scan on changed  (cost=0.00..0.03 rows=1 width=96) (actual time=0.211..0.212 rows=1 loops=1)
+   ->  CTE Scan on changed  (cost=0.00..0.03 rows=1 width=96) (actual time=0.183..0.184 rows=1 loops=1)
          Buffers: shared hit=30 read=10 dirtied=4
- Planning Time: 0.065 ms
- Execution Time: 0.325 ms
+ Planning Time: 0.063 ms
+ Execution Time: 0.280 ms
 (12 rows)
 
 === outbox worker: pending events of the last 7 days
                                                             QUERY PLAN                                                            
 ----------------------------------------------------------------------------------------------------------------------------------
- Limit  (cost=53803.11..53803.11 rows=1 width=16) (actual time=46.945..48.471 rows=0 loops=1)
+ Limit  (cost=53803.11..53803.11 rows=1 width=16) (actual time=50.137..51.758 rows=0 loops=1)
    Buffers: shared hit=587 read=30341
-   ->  Sort  (cost=53803.11..53803.11 rows=1 width=16) (actual time=46.944..48.470 rows=0 loops=1)
+   ->  Sort  (cost=53803.11..53803.11 rows=1 width=16) (actual time=50.136..51.756 rows=0 loops=1)
          Sort Key: id
          Sort Method: quicksort  Memory: 25kB
          Buffers: shared hit=587 read=30341
-         ->  Gather  (cost=1000.00..53803.10 rows=1 width=16) (actual time=46.941..48.466 rows=0 loops=1)
+         ->  Gather  (cost=1000.00..53803.10 rows=1 width=16) (actual time=50.132..51.753 rows=0 loops=1)
                Workers Planned: 2
                Workers Launched: 2
                Buffers: shared hit=587 read=30341
-               ->  Parallel Seq Scan on outbox  (cost=0.00..52803.00 rows=1 width=16) (actual time=45.580..45.581 rows=0 loops=3)
+               ->  Parallel Seq Scan on outbox  (cost=0.00..52803.00 rows=1 width=16) (actual time=48.787..48.788 rows=0 loops=3)
                      Filter: ((processed_at IS NULL) AND (created_at > (now() - '7 days'::interval)))
                      Rows Removed by Filter: 1000000
                      Buffers: shared hit=587 read=30341
  Planning:
    Buffers: shared hit=21 read=1
- Planning Time: 0.069 ms
- Execution Time: 48.481 ms
+ Planning Time: 0.106 ms
+ Execution Time: 51.767 ms
 (18 rows)
 

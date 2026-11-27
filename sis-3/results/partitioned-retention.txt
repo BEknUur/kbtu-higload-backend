@@ -1,4 +1,4 @@
-Time: 0.054 ms
+Time: 0.032 ms
 === retention: DROP the oldest month outbox_2026_08
-Time: 0.669 ms
+Time: 0.660 ms
 Time: 0.033 ms
