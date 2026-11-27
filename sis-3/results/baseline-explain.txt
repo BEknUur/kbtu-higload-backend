@@ -1,0 +1,95 @@
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Index Scan using products_pkey on products  (cost=0.42..8.44 rows=1 width=110) (actual time=0.031..0.031 rows=1 loops=1)
+   Index Cond: (id = 500000)
+   Buffers: shared hit=3 read=4
+ Planning:
+   Buffers: shared hit=103 read=1
+ Planning Time: 0.223 ms
+ Execution Time: 0.076 ms
+(7 rows)
+
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..11.48 rows=20 width=28) (actual time=0.030..0.090 rows=20 loops=1)
+   Buffers: shared hit=4 read=8
+   ->  Index Scan using products_pkey on products  (cost=0.42..25855.81 rows=46778 width=28) (actual time=0.029..0.088 rows=20 loops=1)
+         Index Cond: (id > 500000)
+         Filter: ((category_id = 11) AND (status = 'active'::text))
+         Rows Removed by Filter: 315
+         Buffers: shared hit=4 read=8
+ Planning:
+   Buffers: shared hit=25
+ Planning Time: 0.067 ms
+ Execution Time: 0.099 ms
+(11 rows)
+
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..220.75 rows=20 width=28) (actual time=0.029..0.597 rows=20 loops=1)
+   Buffers: shared hit=12 read=65
+   ->  Index Scan using products_pkey on products  (cost=0.42..25855.81 rows=2347 width=28) (actual time=0.029..0.595 rows=20 loops=1)
+         Index Cond: (id > 500000)
+         Filter: ((category_id = 100) AND (status = 'active'::text))
+         Rows Removed by Filter: 3431
+         Buffers: shared hit=12 read=65
+ Planning Time: 0.026 ms
+ Execution Time: 0.603 ms
+(9 rows)
+
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1000.45..19951.35 rows=20 width=28) (actual time=130.395..135.946 rows=20 loops=1)
+   Buffers: shared hit=2361 read=21098 written=14769
+   ->  Gather Merge  (cost=1000.45..43639.98 rows=45 width=28) (actual time=130.394..135.943 rows=20 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=2361 read=21098 written=14769
+         ->  Parallel Index Scan using products_pkey on products  (cost=0.42..42634.76 rows=19 width=28) (actual time=10.433..81.299 rows=13 loops=3)
+               Filter: ((price >= '100'::numeric) AND (price <= '110'::numeric) AND (category_id = 100) AND (status = 'active'::text))
+               Rows Removed by Filter: 333317
+               Buffers: shared hit=2361 read=21098 written=14769
+ Planning:
+   Buffers: shared hit=10
+ Planning Time: 0.052 ms
+ Execution Time: 135.960 ms
+(14 rows)
+
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Insert on outbox  (cost=8.45..8.48 rows=0 width=0) (actual time=0.275..0.276 rows=0 loops=1)
+   Buffers: shared hit=50 read=12 dirtied=4
+   CTE changed
+     ->  Update on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.160..0.161 rows=1 loops=1)
+           Buffers: shared hit=23 read=7 dirtied=4
+           ->  Index Scan using products_pkey on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.008..0.008 rows=1 loops=1)
+                 Index Cond: (id = 500000)
+                 Buffers: shared hit=4
+   ->  CTE Scan on changed  (cost=0.00..0.03 rows=1 width=96) (actual time=0.203..0.204 rows=1 loops=1)
+         Buffers: shared hit=30 read=10 dirtied=4
+ Planning Time: 0.070 ms
+ Execution Time: 0.317 ms
+(12 rows)
+
+                                                            QUERY PLAN                                                            
+----------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=53803.11..53803.11 rows=1 width=16) (actual time=49.272..50.841 rows=0 loops=1)
+   Buffers: shared hit=587 read=30341
+   ->  Sort  (cost=53803.11..53803.11 rows=1 width=16) (actual time=49.271..50.840 rows=0 loops=1)
+         Sort Key: id
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=587 read=30341
+         ->  Gather  (cost=1000.00..53803.10 rows=1 width=16) (actual time=49.268..50.836 rows=0 loops=1)
+               Workers Planned: 2
+               Workers Launched: 2
+               Buffers: shared hit=587 read=30341
+               ->  Parallel Seq Scan on outbox  (cost=0.00..52803.00 rows=1 width=16) (actual time=47.682..47.683 rows=0 loops=3)
+                     Filter: ((processed_at IS NULL) AND (created_at > (now() - '7 days'::interval)))
+                     Rows Removed by Filter: 1000000
+                     Buffers: shared hit=587 read=30341
+ Planning:
+   Buffers: shared hit=21 read=1
+ Planning Time: 0.074 ms
+ Execution Time: 50.851 ms
+(18 rows)
+

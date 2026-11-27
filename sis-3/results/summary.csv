@@ -1,0 +1,13 @@
+stage,rate,query,count,p50_ms,p95_ms,p99_ms,max_ms,errors,backends
+baseline,500,get,9039,0.7,2.0,4.2,42.4,0,85
+baseline,500,list_category,3727,1.2,3.4,6.3,29.4,0,85
+baseline,500,list_filter,2234,66.9,156.7,236.7,403.6,0,85
+baseline,500,write,600,1.5,4.3,8.6,50.8,0,85
+baseline,1000,get,18188,1.6,25.2,54.7,98.6,0,85
+baseline,1000,list_category,7515,4.1,36.8,59.3,113.9,0,85
+baseline,1000,list_filter,4011,264.3,839.1,963.2,998.5,286,85
+baseline,1000,write,600,1.9,8.2,29.9,49.2,0,85
+baseline,2000,get,32499,793.4,979.0,997.4,1005.9,3428,85
+baseline,2000,list_category,13694,796.5,977.9,995.8,1004.6,1567,85
+baseline,2000,list_filter,2116,845.6,988.4,999.2,1064.3,6696,85
+baseline,2000,write,600,3.1,19.8,95.9,189.3,0,85
