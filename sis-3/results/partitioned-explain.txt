@@ -1,0 +1,104 @@
+=== get: product card by id
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Index Scan using products_pkey on products  (cost=0.42..8.44 rows=1 width=110) (actual time=0.027..0.028 rows=1 loops=1)
+   Index Cond: (id = 500000)
+   Buffers: shared hit=3 read=4
+ Planning:
+   Buffers: shared hit=135 read=13
+ Planning Time: 0.364 ms
+ Execution Time: 0.069 ms
+(7 rows)
+
+=== list_category: popular category 11, page after id 500000
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..11.32 rows=20 width=28) (actual time=0.020..0.080 rows=20 loops=1)
+   Buffers: shared hit=4 read=8
+   ->  Index Scan using products_pkey on products  (cost=0.42..25627.66 rows=47048 width=28) (actual time=0.019..0.078 rows=20 loops=1)
+         Index Cond: (id > 500000)
+         Filter: ((category_id = 11) AND (status = 'active'::text))
+         Rows Removed by Filter: 315
+         Buffers: shared hit=4 read=8
+ Planning:
+   Buffers: shared hit=31 read=3
+ Planning Time: 0.109 ms
+ Execution Time: 0.090 ms
+(11 rows)
+
+=== list_category: rare category 100, page after id 500000
+                                                                QUERY PLAN                                                                
+------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..76.15 rows=20 width=28) (actual time=0.022..0.076 rows=20 loops=1)
+   Buffers: shared hit=3 read=16
+   ->  Index Scan using products_category on products  (cost=0.42..9239.09 rows=2440 width=28) (actual time=0.022..0.074 rows=20 loops=1)
+         Index Cond: ((category_id = 100) AND (id > 500000))
+         Buffers: shared hit=3 read=16
+ Planning Time: 0.057 ms
+ Execution Time: 0.082 ms
+(7 rows)
+
+=== list_filter: rare category 100, price 100..110
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=218.65..218.70 rows=20 width=28) (actual time=0.210..0.212 rows=20 loops=1)
+   Buffers: shared hit=3 read=42
+   ->  Sort  (cost=218.65..218.79 rows=55 width=28) (actual time=0.210..0.211 rows=20 loops=1)
+         Sort Key: id
+         Sort Method: quicksort  Memory: 27kB
+         Buffers: shared hit=3 read=42
+         ->  Bitmap Heap Scan on products  (cost=5.13..217.19 rows=55 width=28) (actual time=0.032..0.191 rows=39 loops=1)
+               Recheck Cond: ((category_id = 100) AND (price >= '100'::numeric) AND (price <= '110'::numeric) AND (status = 'active'::text))
+               Heap Blocks: exact=39
+               Buffers: shared read=42
+               ->  Bitmap Index Scan on products_category_price  (cost=0.00..5.11 rows=55 width=0) (actual time=0.022..0.022 rows=39 loops=1)
+                     Index Cond: ((category_id = 100) AND (price >= '100'::numeric) AND (price <= '110'::numeric))
+                     Buffers: shared read=3
+ Planning:
+   Buffers: shared hit=10
+ Planning Time: 0.064 ms
+ Execution Time: 0.222 ms
+(17 rows)
+
+=== write: price change + event in outbox
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Insert on outbox  (cost=8.45..8.48 rows=0 width=0) (actual time=0.372..0.373 rows=0 loops=1)
+   Buffers: shared hit=85 read=14 dirtied=10 written=1
+   CTE changed
+     ->  Update on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.197..0.198 rows=1 loops=1)
+           Buffers: shared hit=23 read=13 dirtied=7
+           ->  Index Scan using products_pkey on products  (cost=0.42..8.45 rows=1 width=34) (actual time=0.006..0.007 rows=1 loops=1)
+                 Index Cond: (id = 500000)
+                 Buffers: shared hit=4
+   ->  CTE Scan on changed  (cost=0.00..0.03 rows=1 width=96) (actual time=0.227..0.229 rows=1 loops=1)
+         Buffers: shared hit=32 read=14 dirtied=8
+ Planning Time: 0.044 ms
+ Execution Time: 0.518 ms
+(12 rows)
+
+=== outbox worker: pending events of the last 7 days
+                                                                            QUERY PLAN                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=16.72..16.73 rows=6 width=16) (actual time=0.020..0.020 rows=0 loops=1)
+   Buffers: shared hit=3
+   ->  Sort  (cost=16.72..16.73 rows=6 width=16) (actual time=0.019..0.019 rows=0 loops=1)
+         Sort Key: outbox.id
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=3
+         ->  Append  (cost=0.12..16.64 rows=6 width=16) (actual time=0.014..0.014 rows=0 loops=1)
+               Buffers: shared hit=3
+               Subplans Removed: 3
+               ->  Index Scan using outbox_2026_11_id_idx on outbox_2026_11 outbox_1  (cost=0.14..4.17 rows=1 width=16) (actual time=0.010..0.010 rows=0 loops=1)
+                     Filter: (created_at > (now() - '7 days'::interval))
+                     Buffers: shared hit=3
+               ->  Seq Scan on outbox_2026_12 outbox_2  (cost=0.00..0.00 rows=1 width=16) (actual time=0.001..0.001 rows=0 loops=1)
+                     Filter: ((processed_at IS NULL) AND (created_at > (now() - '7 days'::interval)))
+               ->  Seq Scan on outbox_2027_01 outbox_3  (cost=0.00..0.00 rows=1 width=16) (actual time=0.002..0.002 rows=0 loops=1)
+                     Filter: ((processed_at IS NULL) AND (created_at > (now() - '7 days'::interval)))
+ Planning:
+   Buffers: shared hit=322 read=1
+ Planning Time: 0.546 ms
+ Execution Time: 0.038 ms
+(20 rows)
+

@@ -1,0 +1,91 @@
+name: sis3
+
+services:
+  primary:
+    image: postgres:17
+    env_file: .env
+    shm_size: 1g
+    configs:
+      - source: allow-replication
+        target: /docker-entrypoint-initdb.d/allow-replication.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      retries: 30
+
+  replica:
+    image: postgres:17
+    env_file: .env
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    shm_size: 1g
+    depends_on:
+      primary:
+        condition: service_healthy
+    entrypoint:
+      - bash
+      - -ec
+      - |
+        install -d -o postgres -g postgres -m 700 "$$PGDATA"
+        if [ ! -s "$$PGDATA/PG_VERSION" ]; then
+          gosu postgres pg_basebackup -h primary -U "$$POSTGRES_USER" -D "$$PGDATA" -X stream -c fast -R
+        fi
+        exec docker-entrypoint.sh postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      retries: 60
+
+  pgbouncer:
+    build:
+      dockerfile_inline: |
+        FROM postgres:17
+        RUN apt-get update && apt-get install -y --no-install-recommends pgbouncer \
+            && rm -rf /var/lib/apt/lists/*
+        USER postgres
+        ENTRYPOINT ["pgbouncer", "/etc/pgbouncer/pgbouncer.ini"]
+    configs:
+      - source: pgbouncer-ini
+        target: /etc/pgbouncer/pgbouncer.ini
+      - source: pgbouncer-users
+        target: /etc/pgbouncer/userlist.txt
+    depends_on:
+      primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "6432"]
+      interval: 2s
+      retries: 30
+
+  bench:
+    profiles: [bench]
+    build:
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        RUN pip install --no-cache-dir asyncpg==0.30.0 uvloop==0.21.0
+    volumes:
+      - ./benchmark/bench.py:/bench.py:ro
+    command: [python, /bench.py]
+
+configs:
+  allow-replication:
+    content: |
+      echo "host replication all all scram-sha-256" >> "$$PGDATA/pg_hba.conf"
+  pgbouncer-ini:
+    content: |
+      [databases]
+      ${POSTGRES_DB} = host=primary port=5432
+      ${POSTGRES_DB}_ro = host=replica port=5432 dbname=${POSTGRES_DB}
+
+      [pgbouncer]
+      listen_addr = 0.0.0.0
+      listen_port = 6432
+      auth_type = scram-sha-256
+      auth_file = /etc/pgbouncer/userlist.txt
+      pool_mode = transaction
+      default_pool_size = 20
+      max_client_conn = 1000
+      max_prepared_statements = 200
+  pgbouncer-users:
+    content: |
+      "${POSTGRES_USER}" "${POSTGRES_PASSWORD}"

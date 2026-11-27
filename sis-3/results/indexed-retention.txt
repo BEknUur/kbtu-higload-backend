@@ -1,0 +1,4 @@
+Time: 0.028 ms
+=== retention: DELETE events older than 2026-09-01 00:00:00+00
+Time: 387.061 ms
+Time: 0.144 ms
