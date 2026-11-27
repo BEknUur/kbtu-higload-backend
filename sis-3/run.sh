@@ -1,36 +1,44 @@
 #!/usr/bin/env bash
 # Usage: bash run.sh [stage ...]
-# Stages so far: baseline indexed partitioned pooled. Each stage = fresh database + all changes up to it.
+# Stages: baseline indexed partitioned pooled replica. Each stage = fresh database + all changes up to it.
 set -euo pipefail
 cd "$(dirname "$0")"
 source .env
 
-STAGES=${*:-baseline indexed partitioned pooled}
+STAGES=${*:-baseline indexed partitioned pooled replica}
 RATES=${RATES:-500 1000 2000}
 LOGIN="$POSTGRES_USER:$POSTGRES_PASSWORD"
 DIRECT="postgres://$LOGIN@primary:5432/$POSTGRES_DB"
 BOUNCER="postgres://$LOGIN@pgbouncer:6432/$POSTGRES_DB"
+BOUNCER_RO="postgres://$LOGIN@pgbouncer:6432/${POSTGRES_DB}_ro"
 
 sql() {
   docker compose exec -T primary psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"
 }
 
-bench() { 
+bench() {  
   docker compose run --rm -T -e POOL="${POOL:-80}" \
     -e STAGE="$1" -e RATE="$2" -e READ_URL="$3" -e WRITE_URL="$4" \
     bench
 }
 
-prepare() {  
+prepare() { 
   sql < sql/01_schema.sql
   sql < sql/02_seed.sql
   if [[ $1 != baseline ]]; then
     sql < sql/03_indexes.sql
   fi
-  if [[ $1 =~ partitioned|pooled ]]; then
+  if [[ $1 =~ partitioned|pooled|replica ]]; then
     sql < sql/04_partitioning.sql
   fi
   sql < sql/05_explain.sql > "results/$1-explain.txt"
+}
+
+lag_monitor() {  
+  while true; do
+    sql -Atc "SELECT now()::time(0), write_lag, replay_lag FROM pg_stat_replication" || true
+    sleep 1
+  done
 }
 
 docker compose down -v --remove-orphans
@@ -43,11 +51,20 @@ fi
 for stage in $STAGES; do
   read_url=$DIRECT
   write_url=$DIRECT
-  if [[ $stage == pooled ]]; then
-    docker compose up -d --wait pgbouncer
-    read_url=$BOUNCER
-    write_url=$BOUNCER
-  fi
+  case $stage in
+    pooled)
+      docker compose up -d --wait pgbouncer
+      read_url=$BOUNCER
+      write_url=$BOUNCER
+      ;;
+    replica)
+      docker compose up -d --wait pgbouncer replica
+      read_url=$BOUNCER_RO
+      write_url=$BOUNCER
+      lag_monitor > results/replica-lag.txt &
+      monitor=$!
+      ;;
+  esac
 
   echo "=== $stage: fresh database"
   prepare "$stage"
@@ -66,6 +83,9 @@ for stage in $STAGES; do
     echo "=== $stage: 300 client connections, max_connections = 100"
     POOL=300 bench direct-300 1000 "$DIRECT" "$DIRECT" | tee -a results/summary.csv || true
     POOL=300 bench pgbouncer-300 1000 "$BOUNCER" "$BOUNCER" | tee -a results/summary.csv
+  fi
+  if [[ $stage == replica ]]; then
+    kill "$monitor"
   fi
 done
 

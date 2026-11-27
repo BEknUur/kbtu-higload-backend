@@ -5,10 +5,36 @@ services:
     image: postgres:17
     env_file: .env
     shm_size: 1g
+    configs:
+      - source: allow-replication
+        target: /docker-entrypoint-initdb.d/allow-replication.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 2s
       retries: 30
+
+  replica:
+    image: postgres:17
+    env_file: .env
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    shm_size: 1g
+    depends_on:
+      primary:
+        condition: service_healthy
+    entrypoint:
+      - bash
+      - -ec
+      - |
+        install -d -o postgres -g postgres -m 700 "$$PGDATA"
+        if [ ! -s "$$PGDATA/PG_VERSION" ]; then
+          gosu postgres pg_basebackup -h primary -U "$$POSTGRES_USER" -D "$$PGDATA" -X stream -c fast -R
+        fi
+        exec docker-entrypoint.sh postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      retries: 60
 
   pgbouncer:
     build:
@@ -42,6 +68,9 @@ services:
     command: [python, /bench.py]
 
 configs:
+  allow-replication:
+    content: |
+      echo "host replication all all scram-sha-256" >> "$$PGDATA/pg_hba.conf"
   pgbouncer-ini:
     content: |
       [databases]
