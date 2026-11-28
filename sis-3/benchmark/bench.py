@@ -14,8 +14,7 @@ STAGE = os.environ.get("STAGE", "test")
 RATE = int(os.environ.get("RATE", 500))
 SECONDS = 10 if STAGE == "warmup" else 30
 POOL = int(os.environ.get("POOL", 80))
-WRITE_POOL = int(os.environ.get("WRITE_POOL", 5))
-WRITE_RATE = int(os.environ.get("WRITE_RATE", 20))
+WRITE_RATE = 20
 BACKENDS = "SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend'"
 TIMEOUT = 1.0
 
@@ -90,7 +89,7 @@ async def main():
         reads = await asyncpg.create_pool(os.environ["READ_URL"], min_size=POOL, max_size=POOL)
     except Exception as error:
         sys.exit(f"! {STAGE}: could not open {POOL} connections: {error}")
-    writes = await asyncpg.create_pool(os.environ["WRITE_URL"], min_size=WRITE_POOL, max_size=WRITE_POOL)
+    writes = await asyncpg.create_pool(os.environ["WRITE_URL"], min_size=5, max_size=5)
     await asyncio.gather(traffic(reads, RATE, next_read), traffic(writes, WRITE_RATE, next_write))
     backends = await writes.fetchval(BACKENDS)  # real connections on the primary, while our pools are open
     await reads.close()
