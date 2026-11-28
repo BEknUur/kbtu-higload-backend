@@ -1,0 +1,31 @@
+=== remove the oldest month: 71930 events older than 2026-09-01 00:00:00+00
+--- DELETE on the plain table
+Time: 174.971 ms
+ wal_written | size_before | size_after 
+-------------+-------------+------------
+ 9901 kB     | 362 MB      | 362 MB
+(1 row)
+
+VACUUM afterwards (the dead rows must be cleaned up):
+Time: 480.751 ms
+ size_after_vacuum 
+-------------------
+ 362 MB
+(1 row)
+
+--- DROP the oldest monthly partition
+Time: 6.302 ms
+ wal_written | size_before | size_after 
+-------------+-------------+------------
+ 1018 kB     | 356 MB      | 348 MB
+(1 row)
+
+=== where DELETE wins: remove the events of one product (not a time range)
+--- plain table
+Time: 0.022 ms
+Time: 115.160 ms
+Time: 0.120 ms
+--- monthly partitions: DROP is impossible, DELETE has to visit every partition
+Time: 0.023 ms
+Time: 112.504 ms
+Time: 0.135 ms

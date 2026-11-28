@@ -1,0 +1,46 @@
+=== 3,000,000 sent events + a backlog of 100,000 new ones
+--- flag without an index: the worker query
+                                          QUERY PLAN                                          
+----------------------------------------------------------------------------------------------
+ Limit (actual time=338.138..338.155 rows=100 loops=1)
+   ->  Index Scan using outbox_pkey on outbox (actual time=338.137..338.150 rows=100 loops=1)
+         Filter: (processed_at IS NULL)
+         Rows Removed by Filter: 3000000
+ Planning Time: 0.105 ms
+ Execution Time: 338.167 ms
+(6 rows)
+
+--- flag + partial index outbox_pending: the worker query
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Limit (actual time=0.019..0.033 rows=100 loops=1)
+   ->  Index Scan using outbox_pending on outbox (actual time=0.018..0.029 rows=100 loops=1)
+ Planning Time: 0.134 ms
+ Execution Time: 0.041 ms
+(4 rows)
+
+--- watermark (primary key range, no extra index): the worker query
+                                        QUERY PLAN                                        
+------------------------------------------------------------------------------------------
+ Limit (actual time=0.019..0.033 rows=100 loops=1)
+   ->  Index Scan using outbox_pkey on outbox (actual time=0.019..0.029 rows=100 loops=1)
+         Index Cond: (id > 3000000)
+ Planning Time: 0.032 ms
+ Execution Time: 0.038 ms
+(5 rows)
+
+=== send the whole backlog in batches of 100, one transaction per batch
+--- flag: UPDATE every sent event
+Time: 4628.816 ms (00:04.629)
+ wal_written | table_growth 
+-------------+--------------
+ 29 MB       | 8416 kB
+(1 row)
+
+--- watermark: UPDATE one row per batch
+Time: 2222.091 ms (00:02.222)
+ wal_written | table_growth 
+-------------+--------------
+ 112 kB      | 0 bytes
+(1 row)
+

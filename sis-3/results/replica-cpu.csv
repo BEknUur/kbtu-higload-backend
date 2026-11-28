@@ -1,0 +1,5 @@
+setup,rate,primary_cpu_percent,replica_cpu_percent
+no-replica,1000,27,5
+with-replica,1000,9,26
+no-replica,2000,51,3
+with-replica,2000,10,41
